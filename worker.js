@@ -153,7 +153,6 @@ function toChecklistItem(c) {
   return item;
 }
 
-// Re-order a task's existing checklist by item id; unlisted items keep their order at the end.
 function unknownItemsError(unknown, items) {
   return new Error(
     "Unknown checklist item id(s): " +
@@ -188,6 +187,7 @@ async function replaceChecklist(env, taskId, list) {
   });
 }
 
+// Re-order a task's existing checklist by item id; unlisted items keep their order at the end.
 async function reorderChecklist(env, taskId, order) {
   const task = await habitica(env, "GET", taskPath(taskId));
   const items = task.checklist || [];

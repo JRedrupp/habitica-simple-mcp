@@ -707,6 +707,28 @@ describe("tools", () => {
     assert.equal(calls.filter((c) => c.key.startsWith("PUT")).length, 0);
   });
 
+  it("update_task respects explicit completed:false and lists every unknown id", async () => {
+    fakeHabitica({
+      "GET /tasks/abc": { id: "abc", checklist: [{ id: "i1", text: "one", completed: true }] },
+      "PUT /tasks/abc": { id: "abc", type: "todo", text: "t" },
+    });
+    await callTool("update_task", { taskId: "abc", checklist: [{ id: "i1", completed: false }] });
+    assert.deepEqual(calls.find((c) => c.key === "PUT /tasks/abc").body.checklist, [
+      { id: "i1", text: "one", completed: false },
+    ]);
+    const r = await callTool("update_task", {
+      taskId: "abc",
+      checklist: [{ id: "x" }, { id: "y" }],
+    });
+    assert.match(textOf(r), /Unknown checklist item id\(s\): x, y\. Valid ids: i1/);
+  });
+
+  it("update_task reports (none) when keeping ids on a task without a checklist", async () => {
+    fakeHabitica({ "GET /tasks/abc": { id: "abc" } });
+    const r = await callTool("update_task", { taskId: "abc", checklist: [{ id: "i1" }] });
+    assert.match(textOf(r), /Valid ids: \(none\)/);
+  });
+
   it("update_task checklistOrder reorders existing items and appends unlisted ones", async () => {
     const items = [
       { id: "i1", text: "one", completed: false },
