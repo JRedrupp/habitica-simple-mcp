@@ -175,8 +175,88 @@ describe("Habitica client", () => {
 
   it("copes with non-JSON error bodies", async () => {
     fakeHabitica({ "GET /tags": () => new Response("<html>", { status: 502 }) });
-    const r = await callTool("list_tags", {});
+    const r = await post(
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_tags", arguments: {} } },
+      "/mcp/" + SECRET,
+      { ...env, HABITICA_RETRY_BASE_MS: "0" },
+    ).then(async (x) => (await x.json()).result);
     assert.equal(textOf(r), "Habitica 502: request failed");
+    assert.equal(calls.length, 4);
+  });
+
+  describe("retries", () => {
+    const fast = { ...env, HABITICA_RETRY_BASE_MS: "0" };
+    const call = (name, args, e = fast) =>
+      post(
+        { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } },
+        "/mcp/" + SECRET,
+        e,
+      ).then(async (r) => (await r.json()).result);
+    const flaky = (status, headers) => {
+      let n = 0;
+      return () =>
+        n++ === 0
+          ? new Response("{}", { status, headers })
+          : Response.json({ success: true, data: [] });
+    };
+
+    it("retries a 429 then succeeds", async () => {
+      fakeHabitica({ "GET /tags": flaky(429) });
+      const r = await call("list_tags", {});
+      assert.notEqual(r.isError, true);
+      assert.equal(calls.length, 2);
+    });
+
+    it("retries a 5xx on GET", async () => {
+      fakeHabitica({ "GET /tags": flaky(503) });
+      await call("list_tags", {});
+      assert.equal(calls.length, 2);
+    });
+
+    it("retries a network error on GET", async () => {
+      let n = 0;
+      fakeHabitica({
+        "GET /tags": () => {
+          if (n++ === 0) throw new TypeError("network down");
+          return [];
+        },
+      });
+      const r = await call("list_tags", {});
+      assert.notEqual(r.isError, true);
+      assert.equal(calls.length, 2);
+    });
+
+    it("gives up after 4 attempts", async () => {
+      fakeHabitica({ "GET /tags": () => new Response("{}", { status: 429 }) });
+      const r = await call("list_tags", {});
+      assert.equal(r.isError, true);
+      assert.match(textOf(r), /^Habitica 429/);
+      assert.equal(calls.length, 4);
+    });
+
+    it("does not retry a POST on 5xx but does on 429", async () => {
+      fakeHabitica({ "POST /tasks/user": () => new Response("{}", { status: 502 }) });
+      const args = { type: "todo", text: "x" };
+      await call("create_task", args);
+      assert.equal(calls.length, 1);
+
+      calls.length = 0;
+      fakeHabitica({ "POST /tasks/user": flaky(429) });
+      await call("create_task", args);
+      assert.equal(calls.length, 2);
+    });
+
+    it("honors Retry-After and fails fast when it exceeds the cap", async () => {
+      fakeHabitica({ "GET /tags": flaky(429, { "retry-after": "0.001" }) });
+      await call("list_tags", {});
+      assert.equal(calls.length, 2);
+
+      calls.length = 0;
+      fakeHabitica({ "GET /tags": flaky(429, { "retry-after": "60" }) });
+      const r = await call("list_tags", {});
+      assert.equal(r.isError, true);
+      assert.equal(calls.length, 1);
+    });
   });
 });
 

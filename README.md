@@ -39,6 +39,8 @@ Task responses are slimmed down to the useful fields, since the raw Habitica tas
 
    Optionally set `HABITICA_API_BASE` to point at a different Habitica API (defaults to `https://habitica.com/api/v3`).
 
+   Temporary Habitica errors are retried inside the server (up to 3 times with backoff). `429` is always retried and honors `Retry-After`; `5xx` and network errors are retried for everything except `POST`, to avoid double-scoring or duplicate creates. `HABITICA_RETRY_BASE_MS` (default `500`) sets the base delay.
+
    Habitica API reference: [habitica.com/apidoc](https://habitica.com/apidoc/) (source of the doc blocks: [`tasks.js`](https://github.com/HabitRPG/habitica/blob/develop/website/server/controllers/api-v3/tasks.js)).
 
 3. Your MCP endpoint is:
