@@ -158,8 +158,18 @@ function toChecklistItem(c) {
   return item;
 }
 
-function unknownItemsError(unknown, items) {
-  return new Error(
+// Fetch a task's stored checklist, indexed by item id.
+async function loadChecklist(env, taskId) {
+  const task = await habitica(env, "GET", taskPath(taskId));
+  const items = task.checklist || [];
+  return { items, byId: new Map(items.map((c) => [c.id, c])) };
+}
+
+// Throw if any of `ids` is not in the stored checklist.
+function assertKnownItems(ids, { items, byId }) {
+  const unknown = ids.filter((id) => !byId.has(id));
+  if (!unknown.length) return;
+  throw new Error(
     "Unknown checklist item id(s): " +
       unknown.join(", ") +
       ". Valid ids: " +
@@ -176,11 +186,12 @@ async function replaceChecklist(env, taskId, list) {
     c.id !== undefined &&
     (c.text === undefined || c.completed === undefined);
   if (!list.some(partial)) return list.map(toChecklistItem);
-  const task = await habitica(env, "GET", taskPath(taskId));
-  const items = task.checklist || [];
-  const byId = new Map(items.map((c) => [c.id, c]));
-  const unknown = list.filter((c) => partial(c) && !byId.has(c.id)).map((c) => c.id);
-  if (unknown.length) throw unknownItemsError(unknown, items);
+  const stored = await loadChecklist(env, taskId);
+  const { byId } = stored;
+  assertKnownItems(
+    list.filter(partial).map((c) => c.id),
+    stored,
+  );
   return list.map((c) => {
     if (!partial(c)) return toChecklistItem(c);
     const have = byId.get(c.id);
@@ -194,11 +205,9 @@ async function replaceChecklist(env, taskId, list) {
 
 // Re-order a task's existing checklist by item id; unlisted items keep their order at the end.
 async function reorderChecklist(env, taskId, order) {
-  const task = await habitica(env, "GET", taskPath(taskId));
-  const items = task.checklist || [];
-  const byId = new Map(items.map((c) => [c.id, c]));
-  const unknown = order.filter((id) => !byId.has(id));
-  if (unknown.length) throw unknownItemsError(unknown, items);
+  const stored = await loadChecklist(env, taskId);
+  const { items, byId } = stored;
+  assertKnownItems(order, stored);
   const seen = new Set(order);
   return [...order.map((id) => byId.get(id)), ...items.filter((c) => !seen.has(c.id))].map(
     toChecklistItem,
@@ -366,6 +375,8 @@ function playerStatus(u) {
   };
 }
 
+const DAY_MS = 86400000;
+
 // Start (UTC ms) of the user's current Habitica day, honouring their timezone
 // offset (minutes, UTC minus local) and custom day start hour.
 function startOfToday(u, now = Date.now()) {
@@ -373,10 +384,24 @@ function startOfToday(u, now = Date.now()) {
   const offset = (p.timezoneOffset || 0) * 60000;
   const dayStart = (p.dayStart || 0) * 3600000;
   const local = now - offset - dayStart;
-  return Math.floor(local / 86400000) * 86400000 + dayStart + offset;
+  return Math.floor(local / DAY_MS) * DAY_MS + dayStart + offset;
 }
 
 const DUE_SOON_DAYS = 3;
+
+// Split open, dated to-dos (soonest first) into overdue and due within DUE_SOON_DAYS.
+function partitionTodos(todos, start) {
+  const soonEnd = start + (DUE_SOON_DAYS + 1) * DAY_MS;
+  const dated = todos
+    .filter((t) => !t.completed && t.date)
+    .map((t) => ({ t, at: Date.parse(t.date) }))
+    .filter((x) => !Number.isNaN(x.at))
+    .sort((a, b) => a.at - b.at);
+  return {
+    overdue: dated.filter((x) => x.at < start).map((x) => compactTask(x.t)),
+    dueSoon: dated.filter((x) => x.at >= start && x.at < soonEnd).map((x) => compactTask(x.t)),
+  };
+}
 
 // Minimal task shape for overviews; use get_task for notes, schedule and checklist items.
 function compactTask(t) {
@@ -400,15 +425,16 @@ tool(
   async (_a, env) => {
     const u = await habitica(env, "GET", "/user");
     const s = u.stats || {};
+    const { hp, damagePaused } = playerStatus(u);
     return {
       name: u.profile && u.profile.name,
       class: s.class,
       level: s.lvl,
-      hp: playerStatus(u).hp,
+      hp,
       mp: Math.round(s.mp) + "/" + s.maxMP,
       xp: Math.round(s.exp) + "/" + s.toNextLevel,
       gold: round(s.gp || 0, 2),
-      damagePaused: playerStatus(u).damagePaused,
+      damagePaused,
     };
   },
 );
@@ -425,18 +451,8 @@ tool(
       habitica(env, "GET", "/tasks/user?type=dailys"),
       habitica(env, "GET", "/tasks/user?type=todos"),
     ]);
-    const start = startOfToday(u);
-    const soonEnd = start + (DUE_SOON_DAYS + 1) * 86400000;
-    const dated = todos
-      .filter((t) => !t.completed && t.date)
-      .map((t) => ({ t, at: Date.parse(t.date) }))
-      .filter((x) => !Number.isNaN(x.at))
-      .sort((a, b) => a.at - b.at);
     const dailiesDue = dailys.filter((t) => t.isDue && !t.completed).map(compactTask);
-    const todosOverdue = dated.filter((x) => x.at < start).map((x) => compactTask(x.t));
-    const todosDueSoon = dated
-      .filter((x) => x.at >= start && x.at < soonEnd)
-      .map((x) => compactTask(x.t));
+    const { overdue: todosOverdue, dueSoon: todosDueSoon } = partitionTodos(todos, startOfToday(u));
     return {
       status: playerStatus(u),
       counts: {
@@ -849,6 +865,22 @@ const rpcError = (id, code, message) => ({
 const rpcResult = (id, result) => ({ jsonrpc: "2.0", id, result });
 const asText = (value) => (typeof value === "string" ? value : JSON.stringify(value, null, 2));
 
+const toolError = (text) => ({ isError: true, content: [{ type: "text", text }] });
+
+// Run a tools/call request. Returns the MCP tool result, or null for an unknown tool.
+async function callTool(params, env) {
+  const t = TOOLS.find((x) => x.name === (params && params.name));
+  if (!t) return null;
+  const args = (params && params.arguments) || {};
+  const problem = validate(t.inputSchema, args, "arguments");
+  if (problem) return toolError(problem);
+  try {
+    return { content: [{ type: "text", text: asText(await t.handler(args, env)) }] };
+  } catch (e) {
+    return toolError(e instanceof Error ? e.message : String(e));
+  }
+}
+
 async function handleMessage(msg, env) {
   if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") {
     return rpcError(msg && msg.id, -32600, "Invalid request");
@@ -878,27 +910,9 @@ async function handleMessage(msg, env) {
         })),
       });
     case "tools/call": {
-      const t = TOOLS.find((x) => x.name === (params && params.name));
-      if (!t) return rpcError(id, -32602, "Unknown tool: " + (params && params.name));
-      const args = (params && params.arguments) || {};
-      const problem = validate(t.inputSchema, args, "arguments");
-      if (problem) {
-        return rpcResult(id, {
-          isError: true,
-          content: [{ type: "text", text: problem }],
-        });
-      }
-      try {
-        const out = await t.handler(args, env);
-        return rpcResult(id, {
-          content: [{ type: "text", text: asText(out) }],
-        });
-      } catch (e) {
-        return rpcResult(id, {
-          isError: true,
-          content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }],
-        });
-      }
+      const result = await callTool(params, env);
+      if (!result) return rpcError(id, -32602, "Unknown tool: " + (params && params.name));
+      return rpcResult(id, result);
     }
     default:
       return isNotification ? null : rpcError(id, -32601, "Method not found: " + method);
@@ -922,16 +936,31 @@ const json = (data, status = 200) =>
     },
   });
 
+// True for /mcp/<MCP_SECRET> when the secret is configured and long enough.
+function isAuthorized(pathname, env) {
+  const [root, secret] = pathname.split("/").filter(Boolean);
+  return (
+    root === "mcp" &&
+    Boolean(env.MCP_SECRET) &&
+    env.MCP_SECRET.length >= 24 &&
+    Boolean(secret) &&
+    safeEqual(secret, env.MCP_SECRET)
+  );
+}
+
+// Answer one JSON-RPC message or a batch; notifications-only input gets a bare 202.
+async function handlePayload(payload, env) {
+  if (Array.isArray(payload)) {
+    const replies = (await Promise.all(payload.map((m) => handleMessage(m, env)))).filter(Boolean);
+    return replies.length ? json(replies) : new Response(null, { status: 202 });
+  }
+  const reply = await handleMessage(payload, env);
+  return reply ? json(reply) : new Response(null, { status: 202 });
+}
+
 export default {
   async fetch(request, env) {
-    const [root, secret] = new URL(request.url).pathname.split("/").filter(Boolean);
-    if (
-      root !== "mcp" ||
-      !env.MCP_SECRET ||
-      env.MCP_SECRET.length < 24 ||
-      !secret ||
-      !safeEqual(secret, env.MCP_SECRET)
-    ) {
+    if (!isAuthorized(new URL(request.url).pathname, env)) {
       return new Response("Not found", { status: 404 });
     }
     // Stateless JSON mode: only POST is used.
@@ -948,14 +977,6 @@ export default {
     } catch {
       return json(rpcError(null, -32700, "Parse error"), 400);
     }
-
-    if (Array.isArray(payload)) {
-      const replies = (await Promise.all(payload.map((m) => handleMessage(m, env)))).filter(
-        Boolean,
-      );
-      return replies.length ? json(replies) : new Response(null, { status: 202 });
-    }
-    const reply = await handleMessage(payload, env);
-    return reply ? json(reply) : new Response(null, { status: 202 });
+    return handlePayload(payload, env);
   },
 };
