@@ -202,21 +202,25 @@ function slimChecklist(t) {
   return t.checklist.map((c) => ({ id: c.id, text: c.text, completed: c.completed }));
 }
 
-// Case-insensitive search: every whitespace-separated term must appear in the title, notes or a
-// checklist item. Tasks matching in the title come first; otherwise Habitica's order is kept.
-function matchTasks(tasks, query) {
-  const terms = String(query).toLowerCase().split(/\s+/).filter(Boolean);
+// Case-insensitive search: every whitespace-separated term must appear in the title, or failing
+// that anywhere in the title, notes and checklist. Title matches come first; otherwise Habitica's
+// order is kept.
+function matchTasks(tasks, terms) {
   const hasAll = (text) => terms.every((w) => text.includes(w));
-  const hits = [];
+  const inTitle = [];
+  const elsewhere = [];
   for (const t of tasks) {
     const title = String(t.text || "").toLowerCase();
+    if (hasAll(title)) {
+      inTitle.push(t);
+      continue;
+    }
     const body = [title, String(t.notes || "").toLowerCase()]
       .concat((t.checklist || []).map((c) => String(c.text || "").toLowerCase()))
       .join("\n");
-    if (hasAll(title)) hits.push({ t, rank: 0 });
-    else if (hasAll(body)) hits.push({ t, rank: 1 });
+    if (hasAll(body)) elsewhere.push(t);
   }
-  return hits.sort((a, b) => a.rank - b.rank).map((h) => h.t);
+  return inTitle.concat(elsewhere);
 }
 
 const round = (n, dp = 0) => (n === undefined ? undefined : Math.round(n * 10 ** dp) / 10 ** dp);
@@ -365,22 +369,26 @@ tool(
 
 tool(
   "find_task",
-  "Find tasks by name. Case-insensitive; every word in the query must appear in the title, notes or a checklist item (title matches come first). Searches habits, dailies, to-dos and rewards; add includeCompleted to also search completed to-dos. Returns at most `limit` tasks (default 10), so narrow the query if it is too broad. Use the returned ids with update_task, score_task and so on.",
+  "Find tasks by name. Case-insensitive; every word in the query must appear in the title, notes or a checklist item (title matches come first). Searches habits, dailies, to-dos and rewards; add includeCompleted to also search completed to-dos (ignored when type is habits, dailys or rewards). Returns at most `limit` tasks (default 10), so narrow the query if it is too broad. Use the returned ids with update_task, score_task and so on.",
   obj(
     {
       query: { type: "string", minLength: 1, description: "Words to look for, e.g. fire door" },
       type: enm(["habits", "dailys", "todos", "rewards"], "Only search this kind of task"),
-      includeCompleted: bool("Also search completed to-dos (extra request; default false)"),
+      includeCompleted: bool(
+        "Also search completed to-dos (extra request; default false; only with type todos or no type)",
+      ),
       limit: int("Maximum results (default 10)", { minimum: 1, maximum: 50 }),
     },
     ["query"],
   ),
   async ({ query, type, includeCompleted, limit = 10 }, env) => {
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) throw new Error("query must contain at least one word");
     let tasks = await habitica(env, "GET", "/tasks/user" + (type ? "?type=" + type : ""));
-    if (includeCompleted) {
+    if (includeCompleted && (!type || type === "todos")) {
       tasks = tasks.concat(await habitica(env, "GET", "/tasks/user?type=completedTodos"));
     }
-    return matchTasks(tasks, query).slice(0, limit).map(slimTask);
+    return matchTasks(tasks, terms).slice(0, limit).map(slimTask);
   },
 );
 

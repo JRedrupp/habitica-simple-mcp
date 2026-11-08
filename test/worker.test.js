@@ -435,6 +435,58 @@ describe("tools", () => {
     assert.deepEqual(dataOf(none), []);
   });
 
+  it("find_task rejects a whitespace-only query without calling Habitica", async () => {
+    const r = await callTool("find_task", { query: "   " });
+    assert.equal(r.isError, true);
+    assert.match(textOf(r), /at least one word/);
+    assert.equal(calls.length, 0);
+  });
+
+  it("find_task ignores includeCompleted for non-todo types", async () => {
+    fakeHabitica({
+      "GET /tasks/user?type=habits": [{ id: "h", type: "habit", text: "Fire drill" }],
+    });
+    const out = dataOf(
+      await callTool("find_task", { query: "fire", type: "habits", includeCompleted: true }),
+    );
+    assert.deepEqual(
+      out.map((t) => t.id),
+      ["h"],
+    );
+    assert.equal(calls.length, 1);
+  });
+
+  it("find_task ranks split title/notes matches after title matches, handles odd input", async () => {
+    fakeHabitica({
+      "GET /tasks/user": [
+        { id: "s", type: "reward", text: "Treat", notes: "a.b (fire" },
+        { id: "n", type: "habit", text: "Door", notes: "fire" },
+        { id: "t", type: "todo", text: "Fire door" },
+      ],
+    });
+    const split = dataOf(await callTool("find_task", { query: "door fire" }));
+    assert.deepEqual(
+      split.map((t) => t.id),
+      ["t", "n"],
+    );
+    const special = dataOf(await callTool("find_task", { query: "(fire" }));
+    assert.deepEqual(
+      special.map((t) => t.id),
+      ["s"],
+    );
+  });
+
+  it("find_task defaults to 10 results", async () => {
+    fakeHabitica({
+      "GET /tasks/user": Array.from({ length: 12 }, (_, i) => ({
+        id: "t" + i,
+        type: "todo",
+        text: "Fire " + i,
+      })),
+    });
+    assert.equal(dataOf(await callTool("find_task", { query: "fire" })).length, 10);
+  });
+
   it("find_task only searches completed to-dos when asked", async () => {
     fakeHabitica({
       "GET /tasks/user": [{ id: "a", type: "todo", text: "Fire door" }],
