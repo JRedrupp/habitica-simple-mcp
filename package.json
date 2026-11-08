@@ -1,0 +1,17 @@
+{
+  "name": "habitica-simple-mcp",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Single-file MCP server for Habitica, as a Cloudflare Worker",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "node --check worker.js",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "prettier": "3.6.2"
+  }
+}
