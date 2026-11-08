@@ -153,20 +153,47 @@ function toChecklistItem(c) {
   return item;
 }
 
+function unknownItemsError(unknown, items) {
+  return new Error(
+    "Unknown checklist item id(s): " +
+      unknown.join(", ") +
+      ". Valid ids: " +
+      (items.map((c) => c.id).join(", ") || "(none)"),
+  );
+}
+
+// Full checklist replacement. An object with an id but no text/completed means "keep that item":
+// Habitica would blank any field we omit, so fill the gaps from the stored item (one GET, and only
+// when some item needs it).
+async function replaceChecklist(env, taskId, list) {
+  const partial = (c) =>
+    typeof c === "object" &&
+    c.id !== undefined &&
+    (c.text === undefined || c.completed === undefined);
+  if (!list.some(partial)) return list.map(toChecklistItem);
+  const task = await habitica(env, "GET", taskPath(taskId));
+  const items = task.checklist || [];
+  const byId = new Map(items.map((c) => [c.id, c]));
+  const unknown = list.filter((c) => partial(c) && !byId.has(c.id)).map((c) => c.id);
+  if (unknown.length) throw unknownItemsError(unknown, items);
+  return list.map((c) => {
+    if (!partial(c)) return toChecklistItem(c);
+    const have = byId.get(c.id);
+    return toChecklistItem({
+      id: c.id,
+      text: c.text !== undefined ? c.text : have.text,
+      completed: c.completed !== undefined ? c.completed : have.completed,
+    });
+  });
+}
+
 // Re-order a task's existing checklist by item id; unlisted items keep their order at the end.
 async function reorderChecklist(env, taskId, order) {
   const task = await habitica(env, "GET", taskPath(taskId));
   const items = task.checklist || [];
   const byId = new Map(items.map((c) => [c.id, c]));
   const unknown = order.filter((id) => !byId.has(id));
-  if (unknown.length) {
-    throw new Error(
-      "Unknown checklist item id(s): " +
-        unknown.join(", ") +
-        ". Valid ids: " +
-        (items.map((c) => c.id).join(", ") || "(none)"),
-    );
-  }
+  if (unknown.length) throw unknownItemsError(unknown, items);
   const seen = new Set(order);
   return [...order.map((id) => byId.get(id)), ...items.filter((c) => !seen.has(c.id))].map(
     toChecklistItem,
@@ -546,7 +573,8 @@ tool(
     if (a.dueDate !== undefined) body.date = a.dueDate;
     if (a.checklist !== undefined && a.checklistOrder !== undefined)
       throw new Error("Pass either checklist or checklistOrder, not both");
-    if (a.checklist !== undefined) body.checklist = a.checklist.map(toChecklistItem);
+    if (a.checklist !== undefined)
+      body.checklist = await replaceChecklist(env, a.taskId, a.checklist);
     if (a.checklistOrder !== undefined)
       body.checklist = await reorderChecklist(env, a.taskId, a.checklistOrder);
     applySchedule(body, a);
