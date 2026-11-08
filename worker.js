@@ -366,6 +366,8 @@ function playerStatus(u) {
   };
 }
 
+const DAY_MS = 86400000;
+
 // Start (UTC ms) of the user's current Habitica day, honouring their timezone
 // offset (minutes, UTC minus local) and custom day start hour.
 function startOfToday(u, now = Date.now()) {
@@ -373,10 +375,24 @@ function startOfToday(u, now = Date.now()) {
   const offset = (p.timezoneOffset || 0) * 60000;
   const dayStart = (p.dayStart || 0) * 3600000;
   const local = now - offset - dayStart;
-  return Math.floor(local / 86400000) * 86400000 + dayStart + offset;
+  return Math.floor(local / DAY_MS) * DAY_MS + dayStart + offset;
 }
 
 const DUE_SOON_DAYS = 3;
+
+// Split open, dated to-dos (soonest first) into overdue and due within DUE_SOON_DAYS.
+function partitionTodos(todos, start) {
+  const soonEnd = start + (DUE_SOON_DAYS + 1) * DAY_MS;
+  const dated = todos
+    .filter((t) => !t.completed && t.date)
+    .map((t) => ({ t, at: Date.parse(t.date) }))
+    .filter((x) => !Number.isNaN(x.at))
+    .sort((a, b) => a.at - b.at);
+  return {
+    overdue: dated.filter((x) => x.at < start).map((x) => compactTask(x.t)),
+    dueSoon: dated.filter((x) => x.at >= start && x.at < soonEnd).map((x) => compactTask(x.t)),
+  };
+}
 
 // Minimal task shape for overviews; use get_task for notes, schedule and checklist items.
 function compactTask(t) {
@@ -425,18 +441,8 @@ tool(
       habitica(env, "GET", "/tasks/user?type=dailys"),
       habitica(env, "GET", "/tasks/user?type=todos"),
     ]);
-    const start = startOfToday(u);
-    const soonEnd = start + (DUE_SOON_DAYS + 1) * 86400000;
-    const dated = todos
-      .filter((t) => !t.completed && t.date)
-      .map((t) => ({ t, at: Date.parse(t.date) }))
-      .filter((x) => !Number.isNaN(x.at))
-      .sort((a, b) => a.at - b.at);
     const dailiesDue = dailys.filter((t) => t.isDue && !t.completed).map(compactTask);
-    const todosOverdue = dated.filter((x) => x.at < start).map((x) => compactTask(x.t));
-    const todosDueSoon = dated
-      .filter((x) => x.at >= start && x.at < soonEnd)
-      .map((x) => compactTask(x.t));
+    const { overdue: todosOverdue, dueSoon: todosDueSoon } = partitionTodos(todos, startOfToday(u));
     return {
       status: playerStatus(u),
       counts: {
