@@ -849,6 +849,22 @@ const rpcError = (id, code, message) => ({
 const rpcResult = (id, result) => ({ jsonrpc: "2.0", id, result });
 const asText = (value) => (typeof value === "string" ? value : JSON.stringify(value, null, 2));
 
+const toolError = (text) => ({ isError: true, content: [{ type: "text", text }] });
+
+// Run a tools/call request. Returns the MCP tool result, or null for an unknown tool.
+async function callTool(params, env) {
+  const t = TOOLS.find((x) => x.name === (params && params.name));
+  if (!t) return null;
+  const args = (params && params.arguments) || {};
+  const problem = validate(t.inputSchema, args, "arguments");
+  if (problem) return toolError(problem);
+  try {
+    return { content: [{ type: "text", text: asText(await t.handler(args, env)) }] };
+  } catch (e) {
+    return toolError(e instanceof Error ? e.message : String(e));
+  }
+}
+
 async function handleMessage(msg, env) {
   if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") {
     return rpcError(msg && msg.id, -32600, "Invalid request");
@@ -878,27 +894,9 @@ async function handleMessage(msg, env) {
         })),
       });
     case "tools/call": {
-      const t = TOOLS.find((x) => x.name === (params && params.name));
-      if (!t) return rpcError(id, -32602, "Unknown tool: " + (params && params.name));
-      const args = (params && params.arguments) || {};
-      const problem = validate(t.inputSchema, args, "arguments");
-      if (problem) {
-        return rpcResult(id, {
-          isError: true,
-          content: [{ type: "text", text: problem }],
-        });
-      }
-      try {
-        const out = await t.handler(args, env);
-        return rpcResult(id, {
-          content: [{ type: "text", text: asText(out) }],
-        });
-      } catch (e) {
-        return rpcResult(id, {
-          isError: true,
-          content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }],
-        });
-      }
+      const result = await callTool(params, env);
+      if (!result) return rpcError(id, -32602, "Unknown tool: " + (params && params.name));
+      return rpcResult(id, result);
     }
     default:
       return isNotification ? null : rpcError(id, -32601, "Method not found: " + method);
