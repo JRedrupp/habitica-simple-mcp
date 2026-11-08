@@ -425,15 +425,16 @@ tool(
   async (_a, env) => {
     const u = await habitica(env, "GET", "/user");
     const s = u.stats || {};
+    const { hp, damagePaused } = playerStatus(u);
     return {
       name: u.profile && u.profile.name,
       class: s.class,
       level: s.lvl,
-      hp: playerStatus(u).hp,
+      hp,
       mp: Math.round(s.mp) + "/" + s.maxMP,
       xp: Math.round(s.exp) + "/" + s.toNextLevel,
       gold: round(s.gp || 0, 2),
-      damagePaused: playerStatus(u).damagePaused,
+      damagePaused,
     };
   },
 );
