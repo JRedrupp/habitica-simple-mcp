@@ -382,7 +382,17 @@ describe("tools", () => {
       "GET /tasks/user?type=todos": [
         { id: "t1", type: "todo", text: "Overdue", date: "2026-11-07T00:00:00.000Z" },
         { id: "t2", type: "todo", text: "Today", date: "2026-11-08T23:00:00.000Z" },
-        { id: "t3", type: "todo", text: "Soon", date: "2026-11-11T00:00:00.000Z" },
+        {
+          id: "t3",
+          type: "todo",
+          text: "Soon",
+          notes: "dropped",
+          date: "2026-11-11T00:00:00.000Z",
+          checklist: [
+            { id: "c1", text: "a", completed: true },
+            { id: "c2", text: "b", completed: false },
+          ],
+        },
         { id: "t4", type: "todo", text: "Far", date: "2026-12-01T00:00:00.000Z" },
         { id: "t5", type: "todo", text: "Undated" },
       ],
@@ -403,6 +413,12 @@ describe("tools", () => {
       ["t2", "t3"],
     );
     assert.equal(calls.length, 3);
+    assert.deepEqual(d.todosDueSoon[1], {
+      id: "t3",
+      text: "Soon",
+      date: "2026-11-11T00:00:00.000Z",
+      checklist: "1/2",
+    });
   });
 
   it("get_today uses the user's timezone for the day boundary", async (t) => {

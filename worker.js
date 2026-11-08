@@ -378,6 +378,21 @@ function startOfToday(u, now = Date.now()) {
 
 const DUE_SOON_DAYS = 3;
 
+// Minimal task shape for overviews; use get_task for notes, schedule and checklist items.
+function compactTask(t) {
+  const items = t.checklist || [];
+  return {
+    id: t.id,
+    text: t.text,
+    priority: t.priority,
+    date: t.date || undefined,
+    streak: t.type === "daily" && t.streak ? t.streak : undefined,
+    checklist: items.length
+      ? items.filter((i) => i.completed).length + "/" + items.length
+      : undefined,
+  };
+}
+
 tool(
   "get_stats",
   "Get the player's profile and stats: level, HP, MP, XP, gold, class, and whether damage is paused (sleeping in the inn).",
@@ -402,7 +417,7 @@ tool(
   "get_today",
   "One-call overview of what's on the player's plate: dailies due today (not yet done), overdue to-dos, to-dos due in the next " +
     DUE_SOON_DAYS +
-    " days, plus HP and whether damage is paused.",
+    " days, plus HP and whether damage is paused. Compact: use get_task for notes, schedule and checklist items.",
   obj(),
   async (_a, env) => {
     const [u, dailys, todos] = await Promise.all([
@@ -417,11 +432,11 @@ tool(
       .map((t) => ({ t, at: Date.parse(t.date) }))
       .filter((x) => !Number.isNaN(x.at))
       .sort((a, b) => a.at - b.at);
-    const dailiesDue = dailys.filter((t) => t.isDue && !t.completed).map(slimTask);
-    const todosOverdue = dated.filter((x) => x.at < start).map((x) => slimTask(x.t));
+    const dailiesDue = dailys.filter((t) => t.isDue && !t.completed).map(compactTask);
+    const todosOverdue = dated.filter((x) => x.at < start).map((x) => compactTask(x.t));
     const todosDueSoon = dated
       .filter((x) => x.at >= start && x.at < soonEnd)
-      .map((x) => slimTask(x.t));
+      .map((x) => compactTask(x.t));
     return {
       status: playerStatus(u),
       counts: {
