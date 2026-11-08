@@ -433,7 +433,7 @@ describe("tools", () => {
 
   it("update_task sends only changed fields and refuses empty updates", async () => {
     fakeHabitica({ "PUT /tasks/abc": { id: "abc", type: "todo", text: "New" } });
-    await callTool("update_task", { taskId: "abc", text: "New" });
+    assert.ok(!(await callTool("update_task", { taskId: "abc", text: "New" })).isError);
     assert.deepEqual(calls[0].body, { text: "New" });
     const r = await callTool("update_task", { taskId: "abc" });
     assert.equal(textOf(r), "Nothing to update");
@@ -515,6 +515,29 @@ describe("tools", () => {
     assert.deepEqual(dataOf(await callTool("delete_task", { taskId: "abc", confirm: true })), {
       deleted: "abc",
     });
+  });
+
+  it("url-encodes task ids in every task endpoint", async () => {
+    const id = "a/b?c";
+    const enc = "a%2Fb%3Fc";
+    const task = { id, type: "todo", text: "t" };
+    fakeHabitica({
+      ["GET /tasks/" + enc]: task,
+      ["PUT /tasks/" + enc]: task,
+      ["POST /tasks/" + enc + "/score/up"]: {},
+      ["POST /tasks/" + enc + "/checklist/i%2F1/score"]: task,
+      ["POST /tasks/" + enc + "/checklist"]: task,
+      ["GET /tags"]: [{ id: "t1", name: "x" }],
+      ["POST /tasks/" + enc + "/tags/t1"]: task,
+    });
+    assert.ok(!(await callTool("get_task", { taskId: id })).isError);
+    await callTool("update_task", { taskId: id, text: "n" });
+    assert.ok(!(await callTool("score_task", { taskId: id })).isError);
+    assert.ok(!(await callTool("score_checklist_item", { taskId: id, itemId: "i/1" })).isError);
+    assert.ok(
+      !(await callTool("checklist_item", { taskId: id, action: "add", text: "x" })).isError,
+    );
+    assert.ok(!(await callTool("tag_task", { taskId: id, tag: "x" })).isError);
   });
 
   it("checklist_item covers add, update, delete and argument checks", async () => {

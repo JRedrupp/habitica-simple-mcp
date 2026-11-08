@@ -8,6 +8,7 @@
 const DEFAULT_API = "https://habitica.com/api/v3";
 const PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const enc = encodeURIComponent;
+const taskPath = (id) => "/tasks/" + enc(id);
 
 // ------------------------------------------------------------ Habitica client
 
@@ -159,7 +160,7 @@ function toChecklistItem(c) {
 
 // Re-order a task's existing checklist by item id; unlisted items keep their order at the end.
 async function reorderChecklist(env, taskId, order) {
-  const task = await habitica(env, "GET", "/tasks/" + enc(taskId));
+  const task = await habitica(env, "GET", taskPath(taskId));
   const items = task.checklist || [];
   const byId = new Map(items.map((c) => [c.id, c]));
   const unknown = order.filter((id) => !byId.has(id));
@@ -330,7 +331,7 @@ tool(
   "get_task",
   "Fetch a single task by id.",
   obj({ taskId: str("Task id") }, ["taskId"]),
-  async ({ taskId }, env) => slimTask(await habitica(env, "GET", "/tasks/" + enc(taskId))),
+  async ({ taskId }, env) => slimTask(await habitica(env, "GET", taskPath(taskId))),
 );
 
 tool(
@@ -347,7 +348,7 @@ tool(
     ["taskId"],
   ),
   async ({ taskId, limit = 30 }, env) => {
-    const t = await habitica(env, "GET", "/tasks/" + enc(taskId));
+    const t = await habitica(env, "GET", taskPath(taskId));
     const history = Array.isArray(t.history) ? t.history : [];
     return {
       id: t.id,
@@ -447,7 +448,7 @@ tool(
       body.checklist = await reorderChecklist(env, a.taskId, a.checklistOrder);
     applySchedule(body, a);
     if (!Object.keys(body).length) throw new Error("Nothing to update");
-    return slimTask(await habitica(env, "PUT", "/tasks/" + enc(a.taskId), body));
+    return slimTask(await habitica(env, "PUT", taskPath(a.taskId), body));
   },
 );
 
@@ -462,7 +463,7 @@ tool(
     ["taskId"],
   ),
   async ({ taskId, direction = "up" }, env) => {
-    const r = await habitica(env, "POST", "/tasks/" + enc(taskId) + "/score/" + direction);
+    const r = await habitica(env, "POST", taskPath(taskId) + "/score/" + direction);
     return {
       hp: round(r.hp),
       mp: round(r.mp),
@@ -485,7 +486,7 @@ tool(
   ),
   async ({ taskId, position }, env) => ({
     moved: true,
-    newOrder: await habitica(env, "POST", "/tasks/" + enc(taskId) + "/move/to/" + position),
+    newOrder: await habitica(env, "POST", taskPath(taskId) + "/move/to/" + position),
   }),
 );
 
@@ -505,7 +506,7 @@ tool(
   ),
   async ({ taskId, confirm }, env) => {
     if (confirm !== true) throw new Error("Refusing to delete without confirm=true");
-    await habitica(env, "DELETE", "/tasks/" + enc(taskId));
+    await habitica(env, "DELETE", taskPath(taskId));
     return { deleted: taskId };
   },
 );
@@ -516,7 +517,7 @@ tool(
   obj({ taskId: str("Task id"), itemId: str("Checklist item id") }, ["taskId", "itemId"]),
   async ({ taskId, itemId }, env) =>
     slimTask(
-      await habitica(env, "POST", "/tasks/" + enc(taskId) + "/checklist/" + enc(itemId) + "/score"),
+      await habitica(env, "POST", taskPath(taskId) + "/checklist/" + enc(itemId) + "/score"),
     ),
 );
 
@@ -533,7 +534,7 @@ tool(
     ["taskId", "action"],
   ),
   async ({ taskId, action, itemId, text }, env) => {
-    const base = "/tasks/" + enc(taskId) + "/checklist";
+    const base = taskPath(taskId) + "/checklist";
     if (action === "add") {
       if (!text) throw new Error("text is required for add");
       return slimTask(await habitica(env, "POST", base, { text }));
@@ -581,7 +582,7 @@ tool(
       await habitica(
         env,
         action === "add" ? "POST" : "DELETE",
-        "/tasks/" + enc(taskId) + "/tags/" + enc(tagId),
+        taskPath(taskId) + "/tags/" + enc(tagId),
       ),
     );
   },
