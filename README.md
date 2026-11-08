@@ -13,6 +13,7 @@ A single-file [MCP](https://modelcontextprotocol.io) server for [Habitica](https
 | `get_task`                              | Fetch one task                                |
 | `get_task_history`                      | Score history of a habit or daily             |
 | `create_task`                           | Create a habit, daily, to-do or reward        |
+| `create_tasks`                          | Create up to 50 tasks in one call             |
 | `update_task`                           | Edit a task; replace or reorder its checklist |
 | `score_task`                            | Complete / score a task (up or down)          |
 | `move_task`                             | Reorder a task                                |

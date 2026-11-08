@@ -109,7 +109,7 @@ describe("MCP protocol", () => {
 
   it("lists well-formed tools without leaking handlers", async () => {
     const { tools } = (await rpc("tools/list")).result;
-    assert.equal(tools.length, 17);
+    assert.equal(tools.length, 18);
     assert.equal(new Set(tools.map((t) => t.name)).size, tools.length);
     for (const t of tools) {
       assert.ok(t.description, t.name);
@@ -135,6 +135,22 @@ describe("argument validation", () => {
     ["delete_task", { taskId: "x", confirm: false }, /confirm must be true/],
     ["set_sleep", { sleeping: "yes" }, /sleeping must be true or false/],
     ["create_task", { type: "todo", text: "t", tags: "a" }, /tags must be a list/],
+    ["create_tasks", { tasks: [] }, /tasks must have at least 1/],
+    [
+      "create_tasks",
+      { tasks: Array.from({ length: 51 }, () => ({ type: "todo", text: "t" })) },
+      /tasks must have at most 50/,
+    ],
+    [
+      "create_tasks",
+      { tasks: [{ type: "todo", text: "ok" }, { type: "todo" }] },
+      /Missing required argument: tasks\[1\]\.text/,
+    ],
+    [
+      "create_tasks",
+      { tasks: [{ type: "todo", text: "ok", priority: 3 }] },
+      /tasks\[0\]\.priority must be one of/,
+    ],
   ];
   for (const [name, args, pattern] of cases) {
     it(name + " " + JSON.stringify(args), async () => {
@@ -411,6 +427,55 @@ describe("tools", () => {
     const r = await callTool("list_tasks", { type: "todos", tag: "nope" });
     assert.equal(r.isError, true);
     assert.match(textOf(r), /No tag matching "nope"\. Existing tags: Work, Home/);
+  });
+
+  it("create_tasks sends one array POST and fetches tags once", async () => {
+    fakeHabitica({
+      "GET /tags": TAGS,
+      "POST /tasks/user": [
+        { id: "a", type: "todo", text: "A" },
+        { id: "b", type: "daily", text: "B" },
+      ],
+    });
+    const r = await callTool("create_tasks", {
+      tasks: [
+        { type: "todo", text: "A", tags: ["Work", "t2"], dueDate: "2026-11-24" },
+        { type: "daily", text: "B", tags: ["home"], checklist: ["x"] },
+      ],
+    });
+    assert.deepEqual(
+      dataOf(r).map((t) => t.id),
+      ["a", "b"],
+    );
+    assert.equal(calls.filter((c) => c.key === "GET /tags").length, 1);
+    const posts = calls.filter((c) => c.key === "POST /tasks/user");
+    assert.equal(posts.length, 1);
+    assert.deepEqual(posts[0].body, [
+      { type: "todo", text: "A", date: "2026-11-24", tags: ["t1", "t2"] },
+      { type: "daily", text: "B", checklist: [{ text: "x" }], tags: ["t2"] },
+    ]);
+  });
+
+  it("create_tasks skips the tag lookup when no task has tags", async () => {
+    fakeHabitica({ "POST /tasks/user": [{ id: "a", type: "todo", text: "A" }] });
+    await callTool("create_tasks", { tasks: [{ type: "todo", text: "A" }] });
+    assert.deepEqual(
+      calls.map((c) => c.key),
+      ["POST /tasks/user"],
+    );
+  });
+
+  it("create_tasks creates nothing when any tag is unknown", async () => {
+    fakeHabitica({ "GET /tags": TAGS });
+    const r = await callTool("create_tasks", {
+      tasks: [
+        { type: "todo", text: "A", tags: ["Work"] },
+        { type: "todo", text: "B", tags: ["Nope"] },
+      ],
+    });
+    assert.equal(r.isError, true);
+    assert.match(textOf(r), /No tag matching "Nope"/);
+    assert.equal(calls.filter((c) => c.key === "POST /tasks/user").length, 0);
   });
 
   it("create_task maps a daily schedule and resolves tags", async () => {
