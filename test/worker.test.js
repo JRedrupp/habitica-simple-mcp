@@ -109,7 +109,7 @@ describe("MCP protocol", () => {
 
   it("lists well-formed tools without leaking handlers", async () => {
     const { tools } = (await rpc("tools/list")).result;
-    assert.equal(tools.length, 16);
+    assert.equal(tools.length, 17);
     assert.equal(new Set(tools.map((t) => t.name)).size, tools.length);
     for (const t of tools) {
       assert.ok(t.description, t.name);
@@ -127,6 +127,8 @@ describe("argument validation", () => {
   const cases = [
     ["get_task", {}, /Missing required argument: taskId/],
     ["get_task", { taskId: 5 }, /taskId must be a string/],
+    ["get_task_history", {}, /Missing required argument: taskId/],
+    ["get_task_history", { taskId: "x", limit: 0 }, /limit must be >= 1/],
     ["list_tasks", { type: "bogus" }, /type must be one of/],
     ["create_task", { type: "todo", text: "" }, /must not be empty/],
     ["move_task", { taskId: "x", position: 1.5 }, /position must be an integer/],
@@ -184,6 +186,43 @@ const TAGS = [
 ];
 
 describe("tools", () => {
+  it("get_task_history returns recent ISO-dated entries", async () => {
+    const history = [1, 2, 3].map((n) => ({
+      date: Date.UTC(2026, 10, n),
+      value: n + 0.123,
+      completed: true,
+    }));
+    fakeHabitica({ "GET /tasks/t1": { id: "t1", text: "Run", type: "daily", history } });
+    const d = dataOf(await callTool("get_task_history", { taskId: "t1", limit: 2 }));
+    assert.equal(d.totalEntries, 3);
+    assert.equal(d.entries.length, 2);
+    assert.equal(d.entries[0].date, "2026-11-02T00:00:00.000Z");
+    assert.equal(d.entries[1].value, 3.12);
+    assert.ok(!("scoredUp" in d.entries[0]));
+  });
+
+  it("get_task_history handles tasks without history", async () => {
+    fakeHabitica({ "GET /tasks/t2": { id: "t2", text: "Prize", type: "reward" } });
+    const d = dataOf(await callTool("get_task_history", { taskId: "t2" }));
+    assert.deepEqual(d.entries, []);
+  });
+
+  it("list_tasks includes dateCompleted for completed todos", async () => {
+    fakeHabitica({
+      "GET /tasks/user?type=completedTodos": [
+        {
+          id: "a",
+          type: "todo",
+          text: "x",
+          completed: true,
+          dateCompleted: "2026-11-01T10:00:00.000Z",
+        },
+      ],
+    });
+    const d = dataOf(await callTool("list_tasks", { type: "completedTodos" }));
+    assert.equal(d[0].dateCompleted, "2026-11-01T10:00:00.000Z");
+  });
+
   it("get_stats shapes the profile", async () => {
     fakeHabitica({
       "GET /user": {
