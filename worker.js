@@ -936,16 +936,31 @@ const json = (data, status = 200) =>
     },
   });
 
+// True for /mcp/<MCP_SECRET> when the secret is configured and long enough.
+function isAuthorized(pathname, env) {
+  const [root, secret] = pathname.split("/").filter(Boolean);
+  return (
+    root === "mcp" &&
+    Boolean(env.MCP_SECRET) &&
+    env.MCP_SECRET.length >= 24 &&
+    Boolean(secret) &&
+    safeEqual(secret, env.MCP_SECRET)
+  );
+}
+
+// Answer one JSON-RPC message or a batch; notifications-only input gets a bare 202.
+async function handlePayload(payload, env) {
+  if (Array.isArray(payload)) {
+    const replies = (await Promise.all(payload.map((m) => handleMessage(m, env)))).filter(Boolean);
+    return replies.length ? json(replies) : new Response(null, { status: 202 });
+  }
+  const reply = await handleMessage(payload, env);
+  return reply ? json(reply) : new Response(null, { status: 202 });
+}
+
 export default {
   async fetch(request, env) {
-    const [root, secret] = new URL(request.url).pathname.split("/").filter(Boolean);
-    if (
-      root !== "mcp" ||
-      !env.MCP_SECRET ||
-      env.MCP_SECRET.length < 24 ||
-      !secret ||
-      !safeEqual(secret, env.MCP_SECRET)
-    ) {
+    if (!isAuthorized(new URL(request.url).pathname, env)) {
       return new Response("Not found", { status: 404 });
     }
     // Stateless JSON mode: only POST is used.
@@ -962,14 +977,6 @@ export default {
     } catch {
       return json(rpcError(null, -32700, "Parse error"), 400);
     }
-
-    if (Array.isArray(payload)) {
-      const replies = (await Promise.all(payload.map((m) => handleMessage(m, env)))).filter(
-        Boolean,
-      );
-      return replies.length ? json(replies) : new Response(null, { status: 202 });
-    }
-    const reply = await handleMessage(payload, env);
-    return reply ? json(reply) : new Response(null, { status: 202 });
+    return handlePayload(payload, env);
   },
 };
