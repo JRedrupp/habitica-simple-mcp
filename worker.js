@@ -137,10 +137,15 @@ function findTagId(tags, nameOrId) {
   return hit.id;
 }
 
-// Resolve a tag given either its id or its (case-insensitive) name.
-async function resolveTag(env, nameOrId) {
-  return findTagId(await habitica(env, "GET", "/tags"), nameOrId);
+// Resolve tags given by id or (case-insensitive) name with a single lookup request.
+// Makes no request when there is nothing to resolve.
+async function resolveTagIds(env, namesOrIds) {
+  if (!namesOrIds.length) return [];
+  const tags = await habitica(env, "GET", "/tags");
+  return namesOrIds.map((n) => findTagId(tags, n));
 }
+
+const resolveTag = async (env, nameOrId) => (await resolveTagIds(env, [nameOrId]))[0];
 
 // A checklist entry is either a string (new item) or { id?, text?, completed? }.
 // Passing an existing id keeps that item (and its completed state).
@@ -495,8 +500,7 @@ tool(
   "Create a habit, daily, to-do or reward. Dailies can be given a schedule (frequency, everyX, repeatDays, daysOfMonth, startDate).",
   obj(TASK_PROPS, ["type", "text"]),
   async (a, env) => {
-    const tagIds =
-      a.tags && a.tags.length ? await Promise.all(a.tags.map((t) => resolveTag(env, t))) : [];
+    const tagIds = await resolveTagIds(env, a.tags || []);
     return slimTask(await habitica(env, "POST", "/tasks/user", buildTaskBody(a, tagIds)));
   },
 );

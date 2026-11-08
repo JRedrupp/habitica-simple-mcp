@@ -637,6 +637,13 @@ describe("tools", () => {
     });
   });
 
+  it("create_task fetches tags once however many it attaches", async () => {
+    fakeHabitica({ "GET /tags": TAGS, "POST /tasks/user": { id: "x" } });
+    await callTool("create_task", { type: "todo", text: "T", tags: ["Work", "home"] });
+    assert.equal(calls.filter((c) => c.key === "GET /tags").length, 1);
+    assert.deepEqual(calls.find((c) => c.key === "POST /tasks/user").body.tags, ["t1", "t2"]);
+  });
+
   it("create_task maps todo dates, habit buttons and reward cost", async () => {
     fakeHabitica({ "POST /tasks/user": { id: "x" } });
     await callTool("create_task", { type: "todo", text: "T", dueDate: "2026-12-01" });
