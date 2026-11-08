@@ -11,8 +11,26 @@ const enc = encodeURIComponent;
 
 // ------------------------------------------------------------ Habitica client
 
+const MAX_RETRIES = 3;
+const MAX_WAIT_MS = 5000;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// How long to wait before retrying, or null to give up. Honors Retry-After
+// (seconds) and X-RateLimit-Reset (a date) on 429; otherwise exponential
+// backoff with jitter. Waits beyond MAX_WAIT_MS fail fast.
+function retryDelay(res, attempt, base) {
+  let wait;
+  const retryAfter = res && Number(res.headers.get("retry-after"));
+  const reset = res && Date.parse(res.headers.get("x-ratelimit-reset") || "");
+  if (res && res.status === 429 && retryAfter > 0) wait = retryAfter * 1000;
+  else if (res && res.status === 429 && reset) wait = Math.max(0, reset - Date.now());
+  else wait = base * 2 ** attempt * (0.5 + Math.random() / 2);
+  return wait > MAX_WAIT_MS ? null : wait;
+}
+
 async function habitica(env, method, path, body) {
-  const res = await fetch((env.HABITICA_API_BASE || DEFAULT_API) + path, {
+  const url = (env.HABITICA_API_BASE || DEFAULT_API) + path;
+  const init = {
     method,
     headers: {
       "x-api-user": env.HABITICA_USER_ID,
@@ -22,14 +40,39 @@ async function habitica(env, method, path, body) {
       "content-type": "application/json",
     },
     body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || json.success === false) {
-    throw new Error(
-      "Habitica " + res.status + ": " + (json.message || json.error || "request failed"),
-    );
+  };
+  const base = env.HABITICA_RETRY_BASE_MS === undefined ? 500 : Number(env.HABITICA_RETRY_BASE_MS);
+  // 429 means the request wasn't processed, so it is always safe to retry.
+  // 5xx and network errors may have been processed, so only retry methods that
+  // are safe to repeat (POST scores tasks and creates things).
+  const idempotent = method !== "POST";
+
+  for (let attempt = 0; ; attempt++) {
+    let res;
+    try {
+      res = await fetch(url, init);
+    } catch (e) {
+      const wait = idempotent && attempt < MAX_RETRIES ? retryDelay(null, attempt, base) : null;
+      if (wait === null) throw e;
+      await sleep(wait);
+      continue;
+    }
+    const retryable = res.status === 429 || (res.status >= 500 && idempotent);
+    if (retryable && attempt < MAX_RETRIES) {
+      const wait = retryDelay(res, attempt, base);
+      if (wait !== null) {
+        await sleep(wait);
+        continue;
+      }
+    }
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === false) {
+      throw new Error(
+        "Habitica " + res.status + ": " + (json.message || json.error || "request failed"),
+      );
+    }
+    return json.data;
   }
-  return json.data;
 }
 
 const DAY_KEYS = {
