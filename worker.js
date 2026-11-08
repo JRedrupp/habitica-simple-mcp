@@ -158,8 +158,18 @@ function toChecklistItem(c) {
   return item;
 }
 
-function unknownItemsError(unknown, items) {
-  return new Error(
+// Fetch a task's stored checklist, indexed by item id.
+async function loadChecklist(env, taskId) {
+  const task = await habitica(env, "GET", taskPath(taskId));
+  const items = task.checklist || [];
+  return { items, byId: new Map(items.map((c) => [c.id, c])) };
+}
+
+// Throw if any of `ids` is not in the stored checklist.
+function assertKnownItems(ids, { items, byId }) {
+  const unknown = ids.filter((id) => !byId.has(id));
+  if (!unknown.length) return;
+  throw new Error(
     "Unknown checklist item id(s): " +
       unknown.join(", ") +
       ". Valid ids: " +
@@ -176,11 +186,12 @@ async function replaceChecklist(env, taskId, list) {
     c.id !== undefined &&
     (c.text === undefined || c.completed === undefined);
   if (!list.some(partial)) return list.map(toChecklistItem);
-  const task = await habitica(env, "GET", taskPath(taskId));
-  const items = task.checklist || [];
-  const byId = new Map(items.map((c) => [c.id, c]));
-  const unknown = list.filter((c) => partial(c) && !byId.has(c.id)).map((c) => c.id);
-  if (unknown.length) throw unknownItemsError(unknown, items);
+  const stored = await loadChecklist(env, taskId);
+  const { byId } = stored;
+  assertKnownItems(
+    list.filter(partial).map((c) => c.id),
+    stored,
+  );
   return list.map((c) => {
     if (!partial(c)) return toChecklistItem(c);
     const have = byId.get(c.id);
@@ -194,11 +205,9 @@ async function replaceChecklist(env, taskId, list) {
 
 // Re-order a task's existing checklist by item id; unlisted items keep their order at the end.
 async function reorderChecklist(env, taskId, order) {
-  const task = await habitica(env, "GET", taskPath(taskId));
-  const items = task.checklist || [];
-  const byId = new Map(items.map((c) => [c.id, c]));
-  const unknown = order.filter((id) => !byId.has(id));
-  if (unknown.length) throw unknownItemsError(unknown, items);
+  const stored = await loadChecklist(env, taskId);
+  const { items, byId } = stored;
+  assertKnownItems(order, stored);
   const seen = new Set(order);
   return [...order.map((id) => byId.get(id)), ...items.filter((c) => !seen.has(c.id))].map(
     toChecklistItem,
