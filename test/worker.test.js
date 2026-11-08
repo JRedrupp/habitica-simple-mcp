@@ -109,7 +109,7 @@ describe("MCP protocol", () => {
 
   it("lists well-formed tools without leaking handlers", async () => {
     const { tools } = (await rpc("tools/list")).result;
-    assert.equal(tools.length, 19);
+    assert.equal(tools.length, 20);
     assert.equal(new Set(tools.map((t) => t.name)).size, tools.length);
     for (const t of tools) {
       assert.ok(t.description, t.name);
@@ -365,6 +365,82 @@ describe("tools", () => {
       gold: 12.35,
       damagePaused: true,
     });
+  });
+
+  it("get_today bundles dailies, to-dos and status in three calls", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-08T12:00:00Z") });
+    fakeHabitica({
+      "GET /user": {
+        preferences: { sleep: true, timezoneOffset: 0, dayStart: 0 },
+        stats: { hp: 41.6, maxHealth: 50 },
+      },
+      "GET /tasks/user?type=dailys": [
+        { id: "d1", type: "daily", text: "Due", isDue: true, completed: false },
+        { id: "d2", type: "daily", text: "Done", isDue: true, completed: true },
+        { id: "d3", type: "daily", text: "Not due", isDue: false, completed: false },
+      ],
+      "GET /tasks/user?type=todos": [
+        { id: "t1", type: "todo", text: "Overdue", date: "2026-11-07T00:00:00.000Z" },
+        { id: "t2", type: "todo", text: "Today", date: "2026-11-08T23:00:00.000Z" },
+        {
+          id: "t3",
+          type: "todo",
+          text: "Soon",
+          notes: "dropped",
+          date: "2026-11-11T00:00:00.000Z",
+          checklist: [
+            { id: "c1", text: "a", completed: true },
+            { id: "c2", text: "b", completed: false },
+          ],
+        },
+        { id: "t4", type: "todo", text: "Far", date: "2026-12-01T00:00:00.000Z" },
+        { id: "t5", type: "todo", text: "Undated" },
+      ],
+    });
+    const d = dataOf(await callTool("get_today", {}));
+    assert.deepEqual(d.status, { hp: "42/50", damagePaused: true });
+    assert.deepEqual(d.counts, { dailiesDue: 1, todosOverdue: 1, todosDueSoon: 2 });
+    assert.deepEqual(
+      d.dailiesDue.map((x) => x.id),
+      ["d1"],
+    );
+    assert.deepEqual(
+      d.todosOverdue.map((x) => x.id),
+      ["t1"],
+    );
+    assert.deepEqual(
+      d.todosDueSoon.map((x) => x.id),
+      ["t2", "t3"],
+    );
+    assert.equal(calls.length, 3);
+    assert.deepEqual(d.todosDueSoon[1], {
+      id: "t3",
+      text: "Soon",
+      date: "2026-11-11T00:00:00.000Z",
+      checklist: "1/2",
+    });
+  });
+
+  it("get_today uses the user's timezone for the day boundary", async (t) => {
+    // 02:00Z on 8 Nov is still 7 Nov at UTC-5 (timezoneOffset +300).
+    t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-08T02:00:00Z") });
+    fakeHabitica({
+      "GET /user": { preferences: { timezoneOffset: 300 }, stats: { hp: 10, maxHealth: 50 } },
+      "GET /tasks/user?type=dailys": [],
+      "GET /tasks/user?type=todos": [
+        { id: "a", type: "todo", text: "Local midnight 7th", date: "2026-11-07T05:00:00.000Z" },
+        { id: "b", type: "todo", text: "Before", date: "2026-11-07T04:59:00.000Z" },
+      ],
+    });
+    const d = dataOf(await callTool("get_today", {}));
+    assert.deepEqual(
+      d.todosOverdue.map((x) => x.id),
+      ["b"],
+    );
+    assert.deepEqual(
+      d.todosDueSoon.map((x) => x.id),
+      ["a"],
+    );
   });
 
   it("list_tasks filters dueOnly and slims tasks", async () => {

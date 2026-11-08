@@ -6,25 +6,26 @@ A single-file [MCP](https://modelcontextprotocol.io) server for [Habitica](https
 
 ## Tools
 
-| Tool                                    | Description                                   |
-| --------------------------------------- | --------------------------------------------- |
-| `get_stats`                             | Player stats (HP, MP, XP, gold, level, class) |
-| `list_tasks`                            | List habits, dailies, to-dos and rewards      |
-| `get_task`                              | Fetch one task                                |
-| `get_task_history`                      | Score history of a habit or daily             |
-| `create_task`                           | Create a habit, daily, to-do or reward        |
-| `create_tasks`                          | Create up to 50 tasks in one call             |
-| `find_task`                             | Find tasks by title, notes or checklist       |
-| `update_task`                           | Edit a task; replace or reorder its checklist |
-| `score_task`                            | Complete / score a task (up or down)          |
-| `move_task`                             | Reorder a task                                |
-| `delete_task`                           | Delete a task                                 |
-| `checklist_item`                        | Add, edit or remove checklist items           |
-| `score_checklist_item`                  | Tick a checklist item                         |
-| `list_tags` / `create_tag` / `tag_task` | Manage tags                                   |
-| `set_sleep`                             | Pause or resume damage (inn)                  |
-| `buy_health_potion`                     | Buy a health potion                           |
-| `cast_spell`                            | Cast a class skill                            |
+| Tool                                    | Description                                                                        |
+| --------------------------------------- | ---------------------------------------------------------------------------------- |
+| `get_stats`                             | Player stats (HP, MP, XP, gold, level, class)                                      |
+| `get_today`                             | One-call overview: dailies due, overdue and soon-due to-dos, HP and damage status. |
+| `list_tasks`                            | List habits, dailies, to-dos and rewards                                           |
+| `get_task`                              | Fetch one task                                                                     |
+| `get_task_history`                      | Score history of a habit or daily                                                  |
+| `create_task`                           | Create a habit, daily, to-do or reward                                             |
+| `create_tasks`                          | Create up to 50 tasks in one call                                                  |
+| `find_task`                             | Find tasks by title, notes or checklist                                            |
+| `update_task`                           | Edit a task; replace or reorder its checklist                                      |
+| `score_task`                            | Complete / score a task (up or down)                                               |
+| `move_task`                             | Reorder a task                                                                     |
+| `delete_task`                           | Delete a task                                                                      |
+| `checklist_item`                        | Add, edit or remove checklist items                                                |
+| `score_checklist_item`                  | Tick a checklist item                                                              |
+| `list_tags` / `create_tag` / `tag_task` | Manage tags                                                                        |
+| `set_sleep`                             | Pause or resume damage (inn)                                                       |
+| `buy_health_potion`                     | Buy a health potion                                                                |
+| `cast_spell`                            | Cast a class skill                                                                 |
 
 Task responses are slimmed down to the useful fields, since the raw Habitica task object is very large.
 
