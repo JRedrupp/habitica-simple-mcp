@@ -434,7 +434,7 @@ tool(
   "create_tasks",
   "Create many habits, dailies, to-dos or rewards in one call (max " +
     MAX_BATCH +
-    "), each with the same fields as create_task. Tags are resolved once up front: an unknown tag fails the whole call before anything is created. The create request is a single POST and is not retried on a server error, so after such an error check list_tasks before retrying to avoid duplicates.",
+    "), each with the same fields as create_task. Tags are resolved once up front, and Habitica validates every task before saving any: an unknown tag or an invalid task fails the whole call and nothing is created. The create request is a single POST and is not retried on a server error, so after such an error check list_tasks before retrying to avoid duplicates.",
   obj(
     {
       tasks: {

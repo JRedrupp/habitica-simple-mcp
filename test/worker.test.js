@@ -456,6 +456,15 @@ describe("tools", () => {
     ]);
   });
 
+  it("create_tasks copes with Habitica returning a bare object for one task", async () => {
+    fakeHabitica({ "POST /tasks/user": { id: "a", type: "todo", text: "A" } });
+    const r = await callTool("create_tasks", { tasks: [{ type: "todo", text: "A" }] });
+    assert.deepEqual(
+      dataOf(r).map((t) => t.id),
+      ["a"],
+    );
+  });
+
   it("create_tasks skips the tag lookup when no task has tags", async () => {
     fakeHabitica({ "POST /tasks/user": [{ id: "a", type: "todo", text: "A" }] });
     await callTool("create_tasks", { tasks: [{ type: "todo", text: "A" }] });
