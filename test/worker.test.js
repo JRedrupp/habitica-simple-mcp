@@ -393,6 +393,19 @@ describe("tools", () => {
     );
   });
 
+  it("get_task slims schedules: only dailies, omitting empty repeat and month days", async () => {
+    fakeHabitica({
+      "GET /tasks/d": { id: "d", type: "daily", frequency: "weekly", everyX: 1, daysOfMonth: [] },
+      "GET /tasks/t": { id: "t", type: "todo", frequency: "daily", checklist: [] },
+    });
+    const daily = dataOf(await callTool("get_task", { taskId: "d" }));
+    assert.deepEqual(daily.schedule, { frequency: "weekly", everyX: 1 });
+    assert.equal(daily.checklist, undefined);
+    const todo = dataOf(await callTool("get_task", { taskId: "t" }));
+    assert.equal(todo.schedule, undefined);
+    assert.equal(todo.checklist, undefined);
+  });
+
   it("reports unknown tags with the existing ones", async () => {
     fakeHabitica({ "GET /tasks/user?type=todos": [], "GET /tags": TAGS });
     const r = await callTool("list_tasks", { type: "todos", tag: "nope" });

@@ -98,9 +98,6 @@ const DAY_KEYS = {
 
 // The raw Habitica task object is huge, so keep only what's useful.
 function slimTask(t) {
-  const repeatDays = t.repeat
-    ? Object.keys(DAY_KEYS).filter((d) => t.repeat[DAY_KEYS[d]])
-    : undefined;
   return {
     id: t.id,
     type: t.type,
@@ -111,16 +108,7 @@ function slimTask(t) {
     tags: t.tags && t.tags.length ? t.tags : undefined,
     isDue: t.isDue,
     streak: t.streak,
-    schedule:
-      t.type === "daily"
-        ? {
-            frequency: t.frequency,
-            everyX: t.everyX,
-            repeatDays,
-            daysOfMonth: t.daysOfMonth && t.daysOfMonth.length ? t.daysOfMonth : undefined,
-            startDate: t.startDate,
-          }
-        : undefined,
+    schedule: slimSchedule(t),
     date: t.date || undefined,
     dateCompleted: t.dateCompleted || undefined,
     up: t.up,
@@ -128,14 +116,7 @@ function slimTask(t) {
     counterUp: t.counterUp,
     counterDown: t.counterDown,
     value: t.type === "reward" ? t.value : undefined,
-    checklist:
-      t.checklist && t.checklist.length
-        ? t.checklist.map((c) => ({
-            id: c.id,
-            text: c.text,
-            completed: c.completed,
-          }))
-        : undefined,
+    checklist: slimChecklist(t),
   };
 }
 
@@ -198,6 +179,23 @@ function applySchedule(body, a) {
     for (const d of Object.keys(DAY_KEYS)) repeat[DAY_KEYS[d]] = a.repeatDays.includes(d);
     body.repeat = repeat;
   }
+}
+
+// Read side of applySchedule: a daily's schedule in the slim shape.
+function slimSchedule(t) {
+  if (t.type !== "daily") return undefined;
+  return {
+    frequency: t.frequency,
+    everyX: t.everyX,
+    repeatDays: t.repeat ? Object.keys(DAY_KEYS).filter((d) => t.repeat[DAY_KEYS[d]]) : undefined,
+    daysOfMonth: t.daysOfMonth && t.daysOfMonth.length ? t.daysOfMonth : undefined,
+    startDate: t.startDate,
+  };
+}
+
+function slimChecklist(t) {
+  if (!t.checklist || !t.checklist.length) return undefined;
+  return t.checklist.map((c) => ({ id: c.id, text: c.text, completed: c.completed }));
 }
 
 const round = (n, dp = 0) => (n === undefined ? undefined : Math.round(n * 10 ** dp) / 10 ** dp);
