@@ -1,6 +1,6 @@
 {
   "name": "habitica-simple-mcp",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Single-file MCP server for Habitica, as a Cloudflare Worker",
   "type": "module",
