@@ -68,6 +68,7 @@ function slimTask(t) {
           }
         : undefined,
     date: t.date || undefined,
+    dateCompleted: t.dateCompleted || undefined,
     up: t.up,
     down: t.down,
     counterUp: t.counterUp,
@@ -256,6 +257,39 @@ tool(
   "Fetch a single task by id.",
   obj({ taskId: str("Task id") }, ["taskId"]),
   async ({ taskId }, env) => slimTask(await habitica(env, "GET", "/tasks/" + enc(taskId))),
+);
+
+tool(
+  "get_task_history",
+  "Get the score history of a habit or daily (one entry per day it was scored/due), most recent last. Useful for streaks and consistency.",
+  obj(
+    {
+      taskId: str("Task id"),
+      limit: int("How many of the most recent entries to return (default 30)", {
+        minimum: 1,
+        maximum: 365,
+      }),
+    },
+    ["taskId"],
+  ),
+  async ({ taskId, limit = 30 }, env) => {
+    const t = await habitica(env, "GET", "/tasks/" + enc(taskId));
+    const history = Array.isArray(t.history) ? t.history : [];
+    return {
+      id: t.id,
+      text: t.text,
+      type: t.type,
+      totalEntries: history.length,
+      entries: history.slice(-limit).map((h) => ({
+        date: new Date(h.date).toISOString(),
+        value: round(h.value, 2),
+        completed: h.completed,
+        isDue: h.isDue,
+        scoredUp: h.scoredUp,
+        scoredDown: h.scoredDown,
+      })),
+    };
+  },
 );
 
 tool(
@@ -525,7 +559,7 @@ async function handleMessage(msg, env) {
           ? params.protocolVersion
           : PROTOCOLS[0],
         capabilities: { tools: {} },
-        serverInfo: { name: "habitica", version: "0.2.0" },
+        serverInfo: { name: "habitica", version: "0.3.0" },
       });
     case "ping":
       return rpcResult(id, {});

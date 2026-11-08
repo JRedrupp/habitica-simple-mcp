@@ -11,6 +11,7 @@ A single-file [MCP](https://modelcontextprotocol.io) server for [Habitica](https
 | `get_stats`                             | Player stats (HP, MP, XP, gold, level, class) |
 | `list_tasks`                            | List habits, dailies, to-dos and rewards      |
 | `get_task`                              | Fetch one task                                |
+| `get_task_history`                      | Score history of a habit or daily             |
 | `create_task`                           | Create a habit, daily, to-do or reward        |
 | `update_task`                           | Edit a task                                   |
 | `score_task`                            | Complete / score a task (up or down)          |
