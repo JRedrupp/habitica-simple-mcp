@@ -4,6 +4,8 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/JRedrupp/habitica-simple-mcp)
 
+![Claude checking today's Habitica tasks](docs/demo.gif)
+
 [![CI](https://github.com/JRedrupp/habitica-simple-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/JRedrupp/habitica-simple-mcp/actions/workflows/ci.yml)
 
 A single-file [MCP](https://modelcontextprotocol.io) server for [Habitica](https://habitica.com), written as a dependency-free Cloudflare Worker. Everything lives in [`worker.js`](worker.js): paste it into the Cloudflare dashboard and you have a remote MCP server for Claude (or any MCP client that supports remote HTTP servers).
