@@ -120,9 +120,8 @@ function slimTask(t) {
   };
 }
 
-// Resolve a tag given either its id or its (case-insensitive) name.
-async function resolveTag(env, nameOrId) {
-  const tags = await habitica(env, "GET", "/tags");
+// Find a tag in an already-fetched list by id or (case-insensitive) name.
+function findTagId(tags, nameOrId) {
   const wanted = String(nameOrId).trim().toLowerCase();
   const hit =
     tags.find((t) => t.id === nameOrId) ||
@@ -136,6 +135,11 @@ async function resolveTag(env, nameOrId) {
     );
   }
   return hit.id;
+}
+
+// Resolve a tag given either its id or its (case-insensitive) name.
+async function resolveTag(env, nameOrId) {
+  return findTagId(await habitica(env, "GET", "/tags"), nameOrId);
 }
 
 // A checklist entry is either a string (new item) or { id?, text?, completed? }.
@@ -241,6 +245,9 @@ const SCHEDULE = {
   startDate: str("Dailies: ISO date the schedule starts from, e.g. 2026-11-01"),
 };
 
+// Top-level arguments are named by key alone; nested ones get a full path (tasks[1].text).
+const at = (path, k) => (path === "arguments" ? k : path + "." + k);
+
 // Minimal validator covering the schema features used above.
 function validate(schema, v, path) {
   if (schema.enum && !schema.enum.includes(v))
@@ -265,6 +272,10 @@ function validate(schema, v, path) {
       break;
     case "array":
       if (!Array.isArray(v)) return path + " must be a list";
+      if (schema.minItems !== undefined && v.length < schema.minItems)
+        return path + " must have at least " + schema.minItems + " item(s)";
+      if (schema.maxItems !== undefined && v.length > schema.maxItems)
+        return path + " must have at most " + schema.maxItems + " items";
       for (let i = 0; i < v.length; i++) {
         const e = validate(schema.items, v[i], path + "[" + i + "]");
         if (e) return e;
@@ -274,11 +285,11 @@ function validate(schema, v, path) {
       if (typeof v !== "object" || v === null || Array.isArray(v))
         return path + " must be an object";
       for (const k of schema.required || []) {
-        if (v[k] === undefined) return "Missing required argument: " + k;
+        if (v[k] === undefined) return "Missing required argument: " + at(path, k);
       }
       for (const [k, s] of Object.entries(schema.properties || {})) {
         if (v[k] !== undefined) {
-          const e = validate(s, v[k], k);
+          const e = validate(s, v[k], at(path, k));
           if (e) return e;
         }
       }
@@ -375,40 +386,78 @@ tool(
   },
 );
 
+const TASK_PROPS = {
+  type: enm(["habit", "daily", "todo", "reward"]),
+  text: { type: "string", minLength: 1, description: "Task title" },
+  notes: str("Notes"),
+  priority: PRIORITY,
+  dueDate: str("To-dos only: ISO date, e.g. 2026-11-05"),
+  up: bool("Habits: has a + button (default true)"),
+  down: bool("Habits: has a - button"),
+  checklist: arr(str("Item text"), "To-dos/dailies: checklist item texts"),
+  cost: num("Rewards: gold cost"),
+  tags: arr(str("Tag"), "Tag names or ids to attach (must already exist)"),
+  ...SCHEDULE,
+};
+
+// Build the Habitica request body for a new task; tagIds are already resolved.
+function buildTaskBody(a, tagIds) {
+  const body = { type: a.type, text: a.text };
+  if (a.notes) body.notes = a.notes;
+  if (a.priority) body.priority = a.priority;
+  if (a.dueDate && a.type === "todo") body.date = a.dueDate;
+  if (a.type === "habit") {
+    if (a.up !== undefined) body.up = a.up;
+    if (a.down !== undefined) body.down = a.down;
+  }
+  if (a.checklist && a.checklist.length) body.checklist = a.checklist.map(toChecklistItem);
+  if (a.type === "reward" && a.cost !== undefined) body.value = a.cost;
+  if (a.type === "daily") applySchedule(body, a);
+  if (tagIds && tagIds.length) body.tags = tagIds;
+  return body;
+}
+
 tool(
   "create_task",
   "Create a habit, daily, to-do or reward. Dailies can be given a schedule (frequency, everyX, repeatDays, daysOfMonth, startDate).",
+  obj(TASK_PROPS, ["type", "text"]),
+  async (a, env) => {
+    const tagIds =
+      a.tags && a.tags.length ? await Promise.all(a.tags.map((t) => resolveTag(env, t))) : [];
+    return slimTask(await habitica(env, "POST", "/tasks/user", buildTaskBody(a, tagIds)));
+  },
+);
+
+const MAX_BATCH = 50;
+
+tool(
+  "create_tasks",
+  "Create many habits, dailies, to-dos or rewards in one call (max " +
+    MAX_BATCH +
+    "), each with the same fields as create_task. Tags are resolved once up front, and Habitica validates every task before saving any: an unknown tag or an invalid task fails the whole call and nothing is created. The create request is a single POST and is not retried on a server error, so after such an error check list_tasks before retrying to avoid duplicates.",
   obj(
     {
-      type: enm(["habit", "daily", "todo", "reward"]),
-      text: { type: "string", minLength: 1, description: "Task title" },
-      notes: str("Notes"),
-      priority: PRIORITY,
-      dueDate: str("To-dos only: ISO date, e.g. 2026-11-05"),
-      up: bool("Habits: has a + button (default true)"),
-      down: bool("Habits: has a - button"),
-      checklist: arr(str("Item text"), "To-dos/dailies: checklist item texts"),
-      cost: num("Rewards: gold cost"),
-      tags: arr(str("Tag"), "Tag names or ids to attach (must already exist)"),
-      ...SCHEDULE,
+      tasks: {
+        type: "array",
+        minItems: 1,
+        maxItems: MAX_BATCH,
+        items: obj(TASK_PROPS, ["type", "text"]),
+        description: "Tasks to create",
+      },
     },
-    ["type", "text"],
+    ["tasks"],
   ),
   async (a, env) => {
-    const body = { type: a.type, text: a.text };
-    if (a.notes) body.notes = a.notes;
-    if (a.priority) body.priority = a.priority;
-    if (a.dueDate && a.type === "todo") body.date = a.dueDate;
-    if (a.type === "habit") {
-      if (a.up !== undefined) body.up = a.up;
-      if (a.down !== undefined) body.down = a.down;
-    }
-    if (a.checklist && a.checklist.length) body.checklist = a.checklist.map(toChecklistItem);
-    if (a.type === "reward" && a.cost !== undefined) body.value = a.cost;
-    if (a.type === "daily") applySchedule(body, a);
-    if (a.tags && a.tags.length)
-      body.tags = await Promise.all(a.tags.map((t) => resolveTag(env, t)));
-    return slimTask(await habitica(env, "POST", "/tasks/user", body));
+    const needsTags = a.tasks.some((t) => t.tags && t.tags.length);
+    const allTags = needsTags ? await habitica(env, "GET", "/tags") : [];
+    const bodies = a.tasks.map((t) =>
+      buildTaskBody(
+        t,
+        (t.tags || []).map((n) => findTagId(allTags, n)),
+      ),
+    );
+    const created = await habitica(env, "POST", "/tasks/user", bodies);
+    return (Array.isArray(created) ? created : [created]).map(slimTask);
   },
 );
 
