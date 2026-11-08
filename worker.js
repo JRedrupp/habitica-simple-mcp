@@ -357,6 +357,27 @@ const TOOLS = [];
 const tool = (name, description, inputSchema, handler) =>
   TOOLS.push({ name, description, inputSchema, handler });
 
+// HP and damage status, shared by get_stats and get_today.
+function playerStatus(u) {
+  const s = u.stats || {};
+  return {
+    hp: Math.round(s.hp) + "/" + s.maxHealth,
+    damagePaused: Boolean(u.preferences && u.preferences.sleep),
+  };
+}
+
+// Start (UTC ms) of the user's current Habitica day, honouring their timezone
+// offset (minutes, UTC minus local) and custom day start hour.
+function startOfToday(u, now = Date.now()) {
+  const p = u.preferences || {};
+  const offset = (p.timezoneOffset || 0) * 60000;
+  const dayStart = (p.dayStart || 0) * 3600000;
+  const local = now - offset - dayStart;
+  return Math.floor(local / 86400000) * 86400000 + dayStart + offset;
+}
+
+const DUE_SOON_DAYS = 3;
+
 tool(
   "get_stats",
   "Get the player's profile and stats: level, HP, MP, XP, gold, class, and whether damage is paused (sleeping in the inn).",
@@ -368,11 +389,49 @@ tool(
       name: u.profile && u.profile.name,
       class: s.class,
       level: s.lvl,
-      hp: Math.round(s.hp) + "/" + s.maxHealth,
+      hp: playerStatus(u).hp,
       mp: Math.round(s.mp) + "/" + s.maxMP,
       xp: Math.round(s.exp) + "/" + s.toNextLevel,
       gold: round(s.gp || 0, 2),
-      damagePaused: Boolean(u.preferences && u.preferences.sleep),
+      damagePaused: playerStatus(u).damagePaused,
+    };
+  },
+);
+
+tool(
+  "get_today",
+  "One-call overview of what's on the player's plate: dailies due today (not yet done), overdue to-dos, to-dos due in the next " +
+    DUE_SOON_DAYS +
+    " days, plus HP and whether damage is paused.",
+  obj(),
+  async (_a, env) => {
+    const [u, dailys, todos] = await Promise.all([
+      habitica(env, "GET", "/user"),
+      habitica(env, "GET", "/tasks/user?type=dailys"),
+      habitica(env, "GET", "/tasks/user?type=todos"),
+    ]);
+    const start = startOfToday(u);
+    const soonEnd = start + (DUE_SOON_DAYS + 1) * 86400000;
+    const dated = todos
+      .filter((t) => !t.completed && t.date)
+      .map((t) => ({ t, at: Date.parse(t.date) }))
+      .filter((x) => !Number.isNaN(x.at))
+      .sort((a, b) => a.at - b.at);
+    const dailiesDue = dailys.filter((t) => t.isDue && !t.completed).map(slimTask);
+    const todosOverdue = dated.filter((x) => x.at < start).map((x) => slimTask(x.t));
+    const todosDueSoon = dated
+      .filter((x) => x.at >= start && x.at < soonEnd)
+      .map((x) => slimTask(x.t));
+    return {
+      status: playerStatus(u),
+      counts: {
+        dailiesDue: dailiesDue.length,
+        todosOverdue: todosOverdue.length,
+        todosDueSoon: todosDueSoon.length,
+      },
+      dailiesDue,
+      todosOverdue,
+      todosDueSoon,
     };
   },
 );
