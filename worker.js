@@ -8,6 +8,7 @@
 const DEFAULT_API = "https://habitica.com/api/v3";
 const PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const enc = encodeURIComponent;
+const taskPath = (id) => "/tasks/" + enc(id);
 
 // ------------------------------------------------------------ Habitica client
 
@@ -15,17 +16,31 @@ const MAX_RETRIES = 3;
 const MAX_WAIT_MS = 5000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// How long to wait before retrying, or null to give up. Honors Retry-After
-// (seconds) and X-RateLimit-Reset (a date) on 429; otherwise exponential
-// backoff with jitter. Waits beyond MAX_WAIT_MS fail fast.
-function retryDelay(res, attempt, base) {
-  let wait;
-  const retryAfter = res && Number(res.headers.get("retry-after"));
-  const reset = res && Date.parse(res.headers.get("x-ratelimit-reset") || "");
-  if (res && res.status === 429 && retryAfter > 0) wait = retryAfter * 1000;
-  else if (res && res.status === 429 && reset) wait = Math.max(0, reset - Date.now());
-  else wait = base * 2 ** attempt * (0.5 + Math.random() / 2);
-  return wait > MAX_WAIT_MS ? null : wait;
+// Exponential backoff with jitter.
+const backoffDelay = (attempt, base) => base * 2 ** attempt * (0.5 + Math.random() / 2);
+
+// The wait a 429 asks for: Retry-After (seconds) or X-RateLimit-Reset (a date).
+// null if the response says neither.
+function rateLimitDelay(res) {
+  const retryAfter = Number(res.headers.get("retry-after"));
+  const reset = Date.parse(res.headers.get("x-ratelimit-reset") || "");
+  if (retryAfter > 0) return retryAfter * 1000;
+  if (reset) return Math.max(0, reset - Date.now());
+  return null;
+}
+
+// Waits beyond MAX_WAIT_MS fail fast: null means give up.
+const capWait = (ms) => (ms > MAX_WAIT_MS ? null : ms);
+
+// Parse a Habitica response, returning its data or throwing its error.
+async function unwrap(res) {
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.success === false) {
+    throw new Error(
+      "Habitica " + res.status + ": " + (json.message || json.error || "request failed"),
+    );
+  }
+  return json.data;
 }
 
 async function habitica(env, method, path, body) {
@@ -52,26 +67,22 @@ async function habitica(env, method, path, body) {
     try {
       res = await fetch(url, init);
     } catch (e) {
-      const wait = idempotent && attempt < MAX_RETRIES ? retryDelay(null, attempt, base) : null;
+      const wait =
+        idempotent && attempt < MAX_RETRIES ? capWait(backoffDelay(attempt, base)) : null;
       if (wait === null) throw e;
       await sleep(wait);
       continue;
     }
     const retryable = res.status === 429 || (res.status >= 500 && idempotent);
     if (retryable && attempt < MAX_RETRIES) {
-      const wait = retryDelay(res, attempt, base);
+      const requested = res.status === 429 ? rateLimitDelay(res) : null;
+      const wait = capWait(requested ?? backoffDelay(attempt, base));
       if (wait !== null) {
         await sleep(wait);
         continue;
       }
     }
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || json.success === false) {
-      throw new Error(
-        "Habitica " + res.status + ": " + (json.message || json.error || "request failed"),
-      );
-    }
-    return json.data;
+    return unwrap(res);
   }
 }
 
@@ -87,9 +98,6 @@ const DAY_KEYS = {
 
 // The raw Habitica task object is huge, so keep only what's useful.
 function slimTask(t) {
-  const repeatDays = t.repeat
-    ? Object.keys(DAY_KEYS).filter((d) => t.repeat[DAY_KEYS[d]])
-    : undefined;
   return {
     id: t.id,
     type: t.type,
@@ -100,16 +108,7 @@ function slimTask(t) {
     tags: t.tags && t.tags.length ? t.tags : undefined,
     isDue: t.isDue,
     streak: t.streak,
-    schedule:
-      t.type === "daily"
-        ? {
-            frequency: t.frequency,
-            everyX: t.everyX,
-            repeatDays,
-            daysOfMonth: t.daysOfMonth && t.daysOfMonth.length ? t.daysOfMonth : undefined,
-            startDate: t.startDate,
-          }
-        : undefined,
+    schedule: slimSchedule(t),
     date: t.date || undefined,
     dateCompleted: t.dateCompleted || undefined,
     up: t.up,
@@ -117,14 +116,7 @@ function slimTask(t) {
     counterUp: t.counterUp,
     counterDown: t.counterDown,
     value: t.type === "reward" ? t.value : undefined,
-    checklist:
-      t.checklist && t.checklist.length
-        ? t.checklist.map((c) => ({
-            id: c.id,
-            text: c.text,
-            completed: c.completed,
-          }))
-        : undefined,
+    checklist: slimChecklist(t),
   };
 }
 
@@ -159,7 +151,7 @@ function toChecklistItem(c) {
 
 // Re-order a task's existing checklist by item id; unlisted items keep their order at the end.
 async function reorderChecklist(env, taskId, order) {
-  const task = await habitica(env, "GET", "/tasks/" + enc(taskId));
+  const task = await habitica(env, "GET", taskPath(taskId));
   const items = task.checklist || [];
   const byId = new Map(items.map((c) => [c.id, c]));
   const unknown = order.filter((id) => !byId.has(id));
@@ -187,6 +179,23 @@ function applySchedule(body, a) {
     for (const d of Object.keys(DAY_KEYS)) repeat[DAY_KEYS[d]] = a.repeatDays.includes(d);
     body.repeat = repeat;
   }
+}
+
+// Read side of applySchedule: a daily's schedule in the slim shape.
+function slimSchedule(t) {
+  if (t.type !== "daily") return undefined;
+  return {
+    frequency: t.frequency,
+    everyX: t.everyX,
+    repeatDays: t.repeat ? Object.keys(DAY_KEYS).filter((d) => t.repeat[DAY_KEYS[d]]) : undefined,
+    daysOfMonth: t.daysOfMonth && t.daysOfMonth.length ? t.daysOfMonth : undefined,
+    startDate: t.startDate,
+  };
+}
+
+function slimChecklist(t) {
+  if (!t.checklist || !t.checklist.length) return undefined;
+  return t.checklist.map((c) => ({ id: c.id, text: c.text, completed: c.completed }));
 }
 
 const round = (n, dp = 0) => (n === undefined ? undefined : Math.round(n * 10 ** dp) / 10 ** dp);
@@ -330,7 +339,7 @@ tool(
   "get_task",
   "Fetch a single task by id.",
   obj({ taskId: str("Task id") }, ["taskId"]),
-  async ({ taskId }, env) => slimTask(await habitica(env, "GET", "/tasks/" + enc(taskId))),
+  async ({ taskId }, env) => slimTask(await habitica(env, "GET", taskPath(taskId))),
 );
 
 tool(
@@ -347,7 +356,7 @@ tool(
     ["taskId"],
   ),
   async ({ taskId, limit = 30 }, env) => {
-    const t = await habitica(env, "GET", "/tasks/" + enc(taskId));
+    const t = await habitica(env, "GET", taskPath(taskId));
     const history = Array.isArray(t.history) ? t.history : [];
     return {
       id: t.id,
@@ -447,7 +456,7 @@ tool(
       body.checklist = await reorderChecklist(env, a.taskId, a.checklistOrder);
     applySchedule(body, a);
     if (!Object.keys(body).length) throw new Error("Nothing to update");
-    return slimTask(await habitica(env, "PUT", "/tasks/" + enc(a.taskId), body));
+    return slimTask(await habitica(env, "PUT", taskPath(a.taskId), body));
   },
 );
 
@@ -462,7 +471,7 @@ tool(
     ["taskId"],
   ),
   async ({ taskId, direction = "up" }, env) => {
-    const r = await habitica(env, "POST", "/tasks/" + enc(taskId) + "/score/" + direction);
+    const r = await habitica(env, "POST", taskPath(taskId) + "/score/" + direction);
     return {
       hp: round(r.hp),
       mp: round(r.mp),
@@ -485,7 +494,7 @@ tool(
   ),
   async ({ taskId, position }, env) => ({
     moved: true,
-    newOrder: await habitica(env, "POST", "/tasks/" + enc(taskId) + "/move/to/" + position),
+    newOrder: await habitica(env, "POST", taskPath(taskId) + "/move/to/" + position),
   }),
 );
 
@@ -505,7 +514,7 @@ tool(
   ),
   async ({ taskId, confirm }, env) => {
     if (confirm !== true) throw new Error("Refusing to delete without confirm=true");
-    await habitica(env, "DELETE", "/tasks/" + enc(taskId));
+    await habitica(env, "DELETE", taskPath(taskId));
     return { deleted: taskId };
   },
 );
@@ -516,7 +525,7 @@ tool(
   obj({ taskId: str("Task id"), itemId: str("Checklist item id") }, ["taskId", "itemId"]),
   async ({ taskId, itemId }, env) =>
     slimTask(
-      await habitica(env, "POST", "/tasks/" + enc(taskId) + "/checklist/" + enc(itemId) + "/score"),
+      await habitica(env, "POST", taskPath(taskId) + "/checklist/" + enc(itemId) + "/score"),
     ),
 );
 
@@ -533,7 +542,7 @@ tool(
     ["taskId", "action"],
   ),
   async ({ taskId, action, itemId, text }, env) => {
-    const base = "/tasks/" + enc(taskId) + "/checklist";
+    const base = taskPath(taskId) + "/checklist";
     if (action === "add") {
       if (!text) throw new Error("text is required for add");
       return slimTask(await habitica(env, "POST", base, { text }));
@@ -581,7 +590,7 @@ tool(
       await habitica(
         env,
         action === "add" ? "POST" : "DELETE",
-        "/tasks/" + enc(taskId) + "/tags/" + enc(tagId),
+        taskPath(taskId) + "/tags/" + enc(tagId),
       ),
     );
   },
