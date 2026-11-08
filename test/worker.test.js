@@ -109,7 +109,7 @@ describe("MCP protocol", () => {
 
   it("lists well-formed tools without leaking handlers", async () => {
     const { tools } = (await rpc("tools/list")).result;
-    assert.equal(tools.length, 18);
+    assert.equal(tools.length, 19);
     assert.equal(new Set(tools.map((t) => t.name)).size, tools.length);
     for (const t of tools) {
       assert.ok(t.description, t.name);
@@ -135,6 +135,10 @@ describe("argument validation", () => {
     ["delete_task", { taskId: "x", confirm: false }, /confirm must be true/],
     ["set_sleep", { sleeping: "yes" }, /sleeping must be true or false/],
     ["create_task", { type: "todo", text: "t", tags: "a" }, /tags must be a list/],
+    ["find_task", { query: "" }, /must not be empty/],
+    ["find_task", { query: "x", limit: 0 }, /limit must be >= 1/],
+    ["find_task", { query: "x", limit: 51 }, /limit must be <= 50/],
+    ["find_task", { query: "x", type: "bogus" }, /type must be one of/],
     ["create_tasks", { tasks: [] }, /tasks must have at least 1/],
     [
       "create_tasks",
@@ -386,6 +390,70 @@ describe("tools", () => {
     );
     assert.deepEqual(out[0].schedule.repeatDays, ["mon", "wed"]);
     assert.equal(out[0].notes, undefined);
+  });
+
+  it("find_task matches words across types, title first, from one request", async () => {
+    fakeHabitica({
+      "GET /tasks/user": [
+        { id: "n", type: "todo", text: "Call landlord", notes: "about the Fire Door" },
+        {
+          id: "c",
+          type: "todo",
+          text: "Order",
+          checklist: [{ id: "i", text: "door fire rating" }],
+        },
+        { id: "t", type: "todo", text: "Fix FIRE door" },
+        { id: "x", type: "habit", text: "Fire drill" },
+        { id: "y", type: "daily", text: "Door" },
+      ],
+    });
+    const out = dataOf(await callTool("find_task", { query: "fire  door" }));
+    assert.deepEqual(
+      out.map((t) => t.id),
+      ["t", "n", "c"],
+    );
+    assert.deepEqual(
+      calls.map((c) => c.key),
+      ["GET /tasks/user"],
+    );
+  });
+
+  it("find_task honours type and limit, and returns [] for no match", async () => {
+    fakeHabitica({
+      "GET /tasks/user?type=todos": [
+        { id: "a", type: "todo", text: "Pay bill A" },
+        { id: "b", type: "todo", text: "Pay bill B" },
+      ],
+    });
+    const two = dataOf(await callTool("find_task", { query: "bill", type: "todos", limit: 1 }));
+    assert.deepEqual(
+      two.map((t) => t.id),
+      ["a"],
+    );
+    const none = await callTool("find_task", { query: "zzz", type: "todos" });
+    assert.equal(none.isError, undefined);
+    assert.deepEqual(dataOf(none), []);
+  });
+
+  it("find_task only searches completed to-dos when asked", async () => {
+    fakeHabitica({
+      "GET /tasks/user": [{ id: "a", type: "todo", text: "Fire door" }],
+      "GET /tasks/user?type=completedTodos": [
+        { id: "b", type: "todo", text: "Old fire door", completed: true },
+      ],
+    });
+    const open = dataOf(await callTool("find_task", { query: "fire" }));
+    assert.deepEqual(
+      open.map((t) => t.id),
+      ["a"],
+    );
+    calls.length = 0;
+    const all = dataOf(await callTool("find_task", { query: "fire", includeCompleted: true }));
+    assert.deepEqual(
+      all.map((t) => t.id),
+      ["a", "b"],
+    );
+    assert.equal(calls.length, 2);
   });
 
   it("list_tasks filters by tag name, and by id", async () => {

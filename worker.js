@@ -202,6 +202,23 @@ function slimChecklist(t) {
   return t.checklist.map((c) => ({ id: c.id, text: c.text, completed: c.completed }));
 }
 
+// Case-insensitive search: every whitespace-separated term must appear in the title, notes or a
+// checklist item. Tasks matching in the title come first; otherwise Habitica's order is kept.
+function matchTasks(tasks, query) {
+  const terms = String(query).toLowerCase().split(/\s+/).filter(Boolean);
+  const hasAll = (text) => terms.every((w) => text.includes(w));
+  const hits = [];
+  for (const t of tasks) {
+    const title = String(t.text || "").toLowerCase();
+    const body = [title, String(t.notes || "").toLowerCase()]
+      .concat((t.checklist || []).map((c) => String(c.text || "").toLowerCase()))
+      .join("\n");
+    if (hasAll(title)) hits.push({ t, rank: 0 });
+    else if (hasAll(body)) hits.push({ t, rank: 1 });
+  }
+  return hits.sort((a, b) => a.rank - b.rank).map((h) => h.t);
+}
+
 const round = (n, dp = 0) => (n === undefined ? undefined : Math.round(n * 10 ** dp) / 10 ** dp);
 
 // -------------------------------------------------------------- JSON schemas
@@ -343,6 +360,27 @@ tool(
       tasks = tasks.filter((t) => t.tags && t.tags.includes(tagId));
     }
     return tasks.map(slimTask);
+  },
+);
+
+tool(
+  "find_task",
+  "Find tasks by name. Case-insensitive; every word in the query must appear in the title, notes or a checklist item (title matches come first). Searches habits, dailies, to-dos and rewards; add includeCompleted to also search completed to-dos. Returns at most `limit` tasks (default 10), so narrow the query if it is too broad. Use the returned ids with update_task, score_task and so on.",
+  obj(
+    {
+      query: { type: "string", minLength: 1, description: "Words to look for, e.g. fire door" },
+      type: enm(["habits", "dailys", "todos", "rewards"], "Only search this kind of task"),
+      includeCompleted: bool("Also search completed to-dos (extra request; default false)"),
+      limit: int("Maximum results (default 10)", { minimum: 1, maximum: 50 }),
+    },
+    ["query"],
+  ),
+  async ({ query, type, includeCompleted, limit = 10 }, env) => {
+    let tasks = await habitica(env, "GET", "/tasks/user" + (type ? "?type=" + type : ""));
+    if (includeCompleted) {
+      tasks = tasks.concat(await habitica(env, "GET", "/tasks/user?type=completedTodos"));
+    }
+    return matchTasks(tasks, query).slice(0, limit).map(slimTask);
   },
 );
 
