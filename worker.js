@@ -16,17 +16,31 @@ const MAX_RETRIES = 3;
 const MAX_WAIT_MS = 5000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// How long to wait before retrying, or null to give up. Honors Retry-After
-// (seconds) and X-RateLimit-Reset (a date) on 429; otherwise exponential
-// backoff with jitter. Waits beyond MAX_WAIT_MS fail fast.
-function retryDelay(res, attempt, base) {
-  let wait;
-  const retryAfter = res && Number(res.headers.get("retry-after"));
-  const reset = res && Date.parse(res.headers.get("x-ratelimit-reset") || "");
-  if (res && res.status === 429 && retryAfter > 0) wait = retryAfter * 1000;
-  else if (res && res.status === 429 && reset) wait = Math.max(0, reset - Date.now());
-  else wait = base * 2 ** attempt * (0.5 + Math.random() / 2);
-  return wait > MAX_WAIT_MS ? null : wait;
+// Exponential backoff with jitter.
+const backoffDelay = (attempt, base) => base * 2 ** attempt * (0.5 + Math.random() / 2);
+
+// The wait a 429 asks for: Retry-After (seconds) or X-RateLimit-Reset (a date).
+// null if the response says neither.
+function rateLimitDelay(res) {
+  const retryAfter = Number(res.headers.get("retry-after"));
+  const reset = Date.parse(res.headers.get("x-ratelimit-reset") || "");
+  if (retryAfter > 0) return retryAfter * 1000;
+  if (reset) return Math.max(0, reset - Date.now());
+  return null;
+}
+
+// Waits beyond MAX_WAIT_MS fail fast: null means give up.
+const capWait = (ms) => (ms > MAX_WAIT_MS ? null : ms);
+
+// Parse a Habitica response, returning its data or throwing its error.
+async function unwrap(res) {
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.success === false) {
+    throw new Error(
+      "Habitica " + res.status + ": " + (json.message || json.error || "request failed"),
+    );
+  }
+  return json.data;
 }
 
 async function habitica(env, method, path, body) {
@@ -53,26 +67,22 @@ async function habitica(env, method, path, body) {
     try {
       res = await fetch(url, init);
     } catch (e) {
-      const wait = idempotent && attempt < MAX_RETRIES ? retryDelay(null, attempt, base) : null;
+      const wait =
+        idempotent && attempt < MAX_RETRIES ? capWait(backoffDelay(attempt, base)) : null;
       if (wait === null) throw e;
       await sleep(wait);
       continue;
     }
     const retryable = res.status === 429 || (res.status >= 500 && idempotent);
     if (retryable && attempt < MAX_RETRIES) {
-      const wait = retryDelay(res, attempt, base);
+      const requested = res.status === 429 ? rateLimitDelay(res) : null;
+      const wait = capWait(requested ?? backoffDelay(attempt, base));
       if (wait !== null) {
         await sleep(wait);
         continue;
       }
     }
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || json.success === false) {
-      throw new Error(
-        "Habitica " + res.status + ": " + (json.message || json.error || "request failed"),
-      );
-    }
-    return json.data;
+    return unwrap(res);
   }
 }
 

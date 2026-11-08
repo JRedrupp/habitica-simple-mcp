@@ -257,6 +257,20 @@ describe("Habitica client", () => {
       assert.equal(r.isError, true);
       assert.equal(calls.length, 1);
     });
+
+    it("honors X-RateLimit-Reset and fails fast when it is far away", async () => {
+      const soon = new Date(Date.now() + 5).toUTCString();
+      fakeHabitica({ "GET /tags": flaky(429, { "x-ratelimit-reset": soon }) });
+      await call("list_tags", {});
+      assert.equal(calls.length, 2);
+
+      calls.length = 0;
+      const far = new Date(Date.now() + 3600_000).toUTCString();
+      fakeHabitica({ "GET /tags": flaky(429, { "x-ratelimit-reset": far }) });
+      const r = await call("list_tags", {});
+      assert.equal(r.isError, true);
+      assert.equal(calls.length, 1);
+    });
   });
 });
 
