@@ -13,7 +13,7 @@ A single-file [MCP](https://modelcontextprotocol.io) server for [Habitica](https
 | `get_task`                              | Fetch one task                                |
 | `get_task_history`                      | Score history of a habit or daily             |
 | `create_task`                           | Create a habit, daily, to-do or reward        |
-| `update_task`                           | Edit a task                                   |
+| `update_task`                           | Edit a task; replace or reorder its checklist |
 | `score_task`                            | Complete / score a task (up or down)          |
 | `move_task`                             | Reorder a task                                |
 | `delete_task`                           | Delete a task                                 |
@@ -38,6 +38,8 @@ Task responses are slimmed down to the useful fields, since the raw Habitica tas
    | `MCP_SECRET`         | A long random string (at least 24 characters), e.g. `openssl rand -hex 24` |
 
    Optionally set `HABITICA_API_BASE` to point at a different Habitica API (defaults to `https://habitica.com/api/v3`).
+
+   Habitica API reference: [habitica.com/apidoc](https://habitica.com/apidoc/) (source of the doc blocks: [`tasks.js`](https://github.com/HabitRPG/habitica/blob/develop/website/server/controllers/api-v3/tasks.js)).
 
 3. Your MCP endpoint is:
 

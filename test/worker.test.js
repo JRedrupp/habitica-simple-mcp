@@ -359,6 +359,47 @@ describe("tools", () => {
     assert.equal(textOf(r), "Nothing to update");
   });
 
+  it("update_task replaces the checklist from strings and objects, and [] clears", async () => {
+    fakeHabitica({ "PUT /tasks/abc": { id: "abc", type: "todo", text: "T" } });
+    await callTool("update_task", {
+      taskId: "abc",
+      checklist: ["a", { id: "i1", completed: true }],
+    });
+    await callTool("update_task", { taskId: "abc", checklist: [] });
+    assert.deepEqual(calls[0].body, { checklist: [{ text: "a" }, { id: "i1", completed: true }] });
+    assert.deepEqual(calls[1].body, { checklist: [] });
+  });
+
+  it("update_task checklistOrder reorders existing items and appends unlisted ones", async () => {
+    const items = [
+      { id: "i1", text: "one", completed: false },
+      { id: "i2", text: "two", completed: true },
+      { id: "i3", text: "three", completed: false },
+    ];
+    fakeHabitica({
+      "GET /tasks/abc": { id: "abc", checklist: items },
+      "PUT /tasks/abc": { id: "abc", type: "todo", text: "T" },
+    });
+    await callTool("update_task", { taskId: "abc", checklistOrder: ["i3", "i2"] });
+    assert.deepEqual(calls[1].body.checklist, [
+      { id: "i3", text: "three", completed: false },
+      { id: "i2", text: "two", completed: true },
+      { id: "i1", text: "one", completed: false },
+    ]);
+  });
+
+  it("update_task checklistOrder rejects unknown ids, and checklist plus checklistOrder", async () => {
+    fakeHabitica({ "GET /tasks/abc": { id: "abc", checklist: [{ id: "i1", text: "one" }] } });
+    const bad = await callTool("update_task", { taskId: "abc", checklistOrder: ["zz"] });
+    assert.match(textOf(bad), /Unknown checklist item id\(s\): zz\. Valid ids: i1/);
+    const both = await callTool("update_task", {
+      taskId: "abc",
+      checklist: [],
+      checklistOrder: [],
+    });
+    assert.match(textOf(both), /either checklist or checklistOrder/);
+  });
+
   it("score_task defaults to up and rounds results", async () => {
     fakeHabitica({
       "POST /tasks/abc/score/up": {

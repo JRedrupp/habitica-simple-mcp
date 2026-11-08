@@ -103,6 +103,37 @@ async function resolveTag(env, nameOrId) {
   return hit.id;
 }
 
+// A checklist entry is either a string (new item) or { id?, text?, completed? }.
+// Passing an existing id keeps that item (and its completed state).
+function toChecklistItem(c) {
+  if (typeof c === "string") return { text: c };
+  const item = {};
+  if (c.id !== undefined) item.id = c.id;
+  if (c.text !== undefined) item.text = c.text;
+  if (c.completed !== undefined) item.completed = c.completed;
+  return item;
+}
+
+// Re-order a task's existing checklist by item id; unlisted items keep their order at the end.
+async function reorderChecklist(env, taskId, order) {
+  const task = await habitica(env, "GET", "/tasks/" + enc(taskId));
+  const items = task.checklist || [];
+  const byId = new Map(items.map((c) => [c.id, c]));
+  const unknown = order.filter((id) => !byId.has(id));
+  if (unknown.length) {
+    throw new Error(
+      "Unknown checklist item id(s): " +
+        unknown.join(", ") +
+        ". Valid ids: " +
+        (items.map((c) => c.id).join(", ") || "(none)"),
+    );
+  }
+  const seen = new Set(order);
+  return [...order.map((id) => byId.get(id)), ...items.filter((c) => !seen.has(c.id))].map(
+    toChecklistItem,
+  );
+}
+
 function applySchedule(body, a) {
   if (a.frequency) body.frequency = a.frequency;
   if (a.everyX !== undefined) body.everyX = a.everyX;
@@ -320,7 +351,7 @@ tool(
       if (a.up !== undefined) body.up = a.up;
       if (a.down !== undefined) body.down = a.down;
     }
-    if (a.checklist && a.checklist.length) body.checklist = a.checklist.map((t) => ({ text: t }));
+    if (a.checklist && a.checklist.length) body.checklist = a.checklist.map(toChecklistItem);
     if (a.type === "reward" && a.cost !== undefined) body.value = a.cost;
     if (a.type === "daily") applySchedule(body, a);
     if (a.tags && a.tags.length)
@@ -331,7 +362,7 @@ tool(
 
 tool(
   "update_task",
-  "Edit an existing task: title, notes, difficulty, due date, or (for dailies) its schedule.",
+  "Edit an existing task: title, notes, difficulty, due date, checklist, or (for dailies) its schedule. checklist replaces the whole list in the order given ([] clears it): use strings for new items, or {id, text?, completed?} to keep an existing item. checklistOrder instead reorders the existing items by id.",
   obj(
     {
       taskId: str("Task id"),
@@ -339,6 +370,23 @@ tool(
       notes: str("New notes"),
       priority: PRIORITY,
       dueDate: str("To-dos only: ISO date"),
+      checklist: arr(
+        {
+          anyOf: [
+            str("New item text"),
+            obj({
+              id: str("Existing item id to keep"),
+              text: str("Item text"),
+              completed: bool("Ticked or not"),
+            }),
+          ],
+        },
+        "To-dos/dailies: replaces the full checklist, in this order. [] clears it",
+      ),
+      checklistOrder: arr(
+        str("Item id"),
+        "Reorder existing checklist items by id (unlisted go last)",
+      ),
       ...SCHEDULE,
     },
     ["taskId"],
@@ -349,6 +397,11 @@ tool(
     if (a.notes !== undefined) body.notes = a.notes;
     if (a.priority !== undefined) body.priority = a.priority;
     if (a.dueDate !== undefined) body.date = a.dueDate;
+    if (a.checklist !== undefined && a.checklistOrder !== undefined)
+      throw new Error("Pass either checklist or checklistOrder, not both");
+    if (a.checklist !== undefined) body.checklist = a.checklist.map(toChecklistItem);
+    if (a.checklistOrder !== undefined)
+      body.checklist = await reorderChecklist(env, a.taskId, a.checklistOrder);
     applySchedule(body, a);
     if (!Object.keys(body).length) throw new Error("Nothing to update");
     return slimTask(await habitica(env, "PUT", "/tasks/" + enc(a.taskId), body));
