@@ -660,15 +660,51 @@ describe("tools", () => {
     assert.equal(textOf(r), "Nothing to update");
   });
 
-  it("update_task replaces the checklist from strings and objects, and [] clears", async () => {
-    fakeHabitica({ "PUT /tasks/abc": { id: "abc", type: "todo", text: "T" } });
+  it("update_task replaces the checklist from strings and full objects, and [] clears", async () => {
+    fakeHabitica({ "PUT /tasks/abc": { id: "abc", type: "todo", text: "t" } });
     await callTool("update_task", {
       taskId: "abc",
-      checklist: ["a", { id: "i1", completed: true }],
+      checklist: ["a", { id: "i1", text: "kept", completed: true }],
     });
     await callTool("update_task", { taskId: "abc", checklist: [] });
-    assert.deepEqual(calls[0].body, { checklist: [{ text: "a" }, { id: "i1", completed: true }] });
+    assert.deepEqual(calls[0].body, {
+      checklist: [{ text: "a" }, { id: "i1", text: "kept", completed: true }],
+    });
     assert.deepEqual(calls[1].body, { checklist: [] });
+    assert.equal(calls.length, 2, "no lookup needed when nothing is partial");
+  });
+
+  it("update_task keeps existing items given only an id, filling text and completed", async () => {
+    fakeHabitica({
+      "GET /tasks/abc": {
+        id: "abc",
+        checklist: [
+          { id: "i1", text: "one", completed: false },
+          { id: "i2", text: "two", completed: true },
+          { id: "i3", text: "three", completed: false },
+        ],
+      },
+      "PUT /tasks/abc": { id: "abc", type: "todo", text: "t" },
+    });
+    await callTool("update_task", {
+      taskId: "abc",
+      checklist: [{ id: "i3" }, { id: "i1", completed: true }, "new", { id: "i2", text: "TWO" }],
+    });
+    assert.equal(calls.filter((c) => c.key === "GET /tasks/abc").length, 1);
+    assert.deepEqual(calls.find((c) => c.key === "PUT /tasks/abc").body.checklist, [
+      { id: "i3", text: "three", completed: false },
+      { id: "i1", text: "one", completed: true },
+      { text: "new" },
+      { id: "i2", text: "TWO", completed: true },
+    ]);
+  });
+
+  it("update_task rejects a partial item with an unknown id before saving", async () => {
+    fakeHabitica({ "GET /tasks/abc": { id: "abc", checklist: [{ id: "i1", text: "one" }] } });
+    const r = await callTool("update_task", { taskId: "abc", checklist: [{ id: "zz" }] });
+    assert.equal(r.isError, true);
+    assert.match(textOf(r), /Unknown checklist item id\(s\): zz\. Valid ids: i1/);
+    assert.equal(calls.filter((c) => c.key.startsWith("PUT")).length, 0);
   });
 
   it("update_task checklistOrder reorders existing items and appends unlisted ones", async () => {
